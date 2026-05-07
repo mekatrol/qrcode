@@ -14,17 +14,18 @@
       "justMyCode": true
     },
     {
-      "name": "Debug Tests",
+      "name": "Debug Test Runner",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
-      "program": "dotnet",
+      "program": "${workspaceFolder}/Mekatrol.QRCode.TestRunner/bin/Debug/net10.0/Mekatrol.QRCode.TestRunner.dll",
       "args": [
-        "test",
-        "${workspaceFolder}/Mekatrol.QRCode.Test/Mekatrol.QRCode.Test.csproj",
-        "--no-build"
+        "EncodeTextGeneratesAndValidatesOneMillionRandomProgramPayloads"
       ],
       "cwd": "${workspaceFolder}",
+      "env": {
+        "RUN_QR_STRESS": "1"
+      },
       "console": "integratedTerminal",
       "stopAtEntry": false,
       "justMyCode": true

@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="Mekatrol.QRCode.Common/Mekatrol.QRCode.Common.csproj" />
   <Project Path="Mekatrol.QRCode.Test/Mekatrol.QRCode.Test.csproj" />
+  <Project Path="Mekatrol.QRCode.TestRunner/Mekatrol.QRCode.TestRunner.csproj" />
   <Project Path="Mekatrol.QRCode.GeneratorApp/Mekatrol.QRCode.GeneratorApp.csproj" />
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
