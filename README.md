@@ -38,6 +38,19 @@ dotnet run --project Mekatrol.QRCode.GeneratorApp/Mekatrol.QRCode.GeneratorApp.c
 dotnet test Mekatrol.QRCode.slnx
 ```
 
+## Linting and Formatting
+
+```bash
+dotnet build Mekatrol.QRCode.slnx /p:EnforceCodeStyleInBuild=true
+```
+
+## Check Packages
+
+```bash
+dotnet package list --project Mekatrol.QRCode.slnx --vulnerable --format json
+dotnet package list --project Mekatrol.QRCode.slnx --deprecated --format json
+```
+
 ## Repository Notes
 
 - Keep generated `bin/` and `obj/` directories out of source control.
