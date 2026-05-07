@@ -509,11 +509,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
             buffer.AppendBits(padByte, _bitsPerByte);
         }
 
-        var dataCodewords = new byte[buffer.BitLength / _bitsPerByte];
-        for (var i = 0; i < buffer.BitLength; i++)
-        {
-            dataCodewords[i >>> _bitIndexToByteShift] |= (byte)(buffer.GetBit(i) << (_highestBitIndexInByte - (i & _bitIndexInByteMask)));
-        }
+        var dataCodewords = buffer.ToByteArray();
 
         return new QRCodeGenerator(version, errorCorrectionLevel, dataCodewords, mask).CreateQRCode();
     }
@@ -607,16 +603,13 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         return result;
     }
 
-    private static byte[] ReedSolomonComputeRemainder(byte[] data, byte[] divisor)
+    private static byte[] ReedSolomonComputeRemainder(ReadOnlySpan<byte> data, ReadOnlySpan<byte> divisor)
     {
-        ArgumentNullException.ThrowIfNull(data);
-        ArgumentNullException.ThrowIfNull(divisor);
-
         var result = new byte[divisor.Length];
         foreach (var value in data)
         {
             var factor = value ^ result[0];
-            Array.Copy(result, 1, result, 0, result.Length - 1);
+            result.AsSpan(1).CopyTo(result);
             result[^1] = 0;
             for (var i = 0; i < result.Length; i++)
             {
@@ -661,10 +654,10 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         for (var i = 0; i < numBlocks; i++)
         {
             var dataLength = shortBlockLength - blockEccLength + (i < numShortBlocks ? 0 : 1);
-            var blockData = data[offset..(offset + dataLength)];
+            var blockData = data.AsSpan(offset, dataLength);
             offset += blockData.Length;
             var block = new byte[shortBlockLength + 1];
-            Array.Copy(blockData, block, blockData.Length);
+            blockData.CopyTo(block);
             var ecc = ReedSolomonComputeRemainder(blockData, rsDivisor);
             Array.Copy(ecc, 0, block, block.Length - blockEccLength, ecc.Length);
             blocks[i] = block;
@@ -896,11 +889,12 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     {
         var result = 0;
 
+        Span<int> runHistory = stackalloc int[_finderPenaltyRunHistoryLength];
         for (var y = 0; y < Size; y++)
         {
             var runColor = false;
             var runX = 0;
-            var runHistory = new int[_finderPenaltyRunHistoryLength];
+            runHistory.Clear();
             for (var x = 0; x < Size; x++)
             {
                 if (_modules[y][x] == runColor)
@@ -930,7 +924,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         {
             var runColor = false;
             var runY = 0;
-            var runHistory = new int[_finderPenaltyRunHistoryLength];
+            runHistory.Clear();
             for (var y = 0; y < Size; y++)
             {
                 if (_modules[y][x] == runColor)
@@ -1016,7 +1010,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         return result;
     }
 
-    private static int FinderPenaltyCountPatterns(int[] runHistory)
+    private static int FinderPenaltyCountPatterns(ReadOnlySpan<int> runHistory)
     {
         var n = runHistory[1];
         var core = n > 0
@@ -1037,7 +1031,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
                     : 0);
     }
 
-    private int FinderPenaltyTerminateAndCount(bool currentRunColor, int currentRunLength, int[] runHistory)
+    private int FinderPenaltyTerminateAndCount(bool currentRunColor, int currentRunLength, Span<int> runHistory)
     {
         if (currentRunColor)
         {
@@ -1050,14 +1044,14 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         return FinderPenaltyCountPatterns(runHistory);
     }
 
-    private void FinderPenaltyAddHistory(int currentRunLength, int[] runHistory)
+    private void FinderPenaltyAddHistory(int currentRunLength, Span<int> runHistory)
     {
         if (runHistory[0] == 0)
         {
             currentRunLength += Size;
         }
 
-        Array.Copy(runHistory, 0, runHistory, 1, runHistory.Length - 1);
+        runHistory[..^1].CopyTo(runHistory[1..]);
         runHistory[0] = currentRunLength;
     }
 }

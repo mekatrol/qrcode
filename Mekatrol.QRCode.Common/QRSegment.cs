@@ -1,12 +1,11 @@
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace Mekatrol.QRCode.Common;
 
 /// <summary>
 /// A segment of character, binary, or control data in a QR Code symbol.
 /// </summary>
-public sealed partial class QRSegment
+public sealed class QRSegment
 {
     // The QR alphanumeric mode character set is fixed by ISO/IEC 18004 and maps characters to base-45 values.
     private const string _alphanumericCharset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
@@ -80,13 +79,25 @@ public sealed partial class QRSegment
     // The exception text identifies ECI assignment values outside the QR specification range.
     private const string _eciAssignmentOutOfRangeMessage = "ECI assignment value out of range";
 
-    // The generated regex matches only QR numeric-mode characters and remains a constant pattern for source generation.
-    private const string _numericPattern = "^[0-9]*$";
+    // Unicode char values below this limit are covered by the ASCII alphanumeric lookup table.
+    private const int _asciiCharacterCount = 128;
 
-    // The generated regex matches only QR alphanumeric-mode characters and remains a constant pattern for source generation.
-    private const string _alphanumericPattern = "^[A-Z0-9 $%*+./:-]*$";
+    // Characters not present in the QR alphanumeric table are marked with -1.
+    private const int _invalidAlphanumericValue = -1;
+
+    // ASCII digit characters start at '0' and are the only characters accepted by QR numeric mode.
+    private const char _minimumNumericCharacter = '0';
+
+    // ASCII digit characters end at '9' and are the only characters accepted by QR numeric mode.
+    private const char _maximumNumericCharacter = '9';
+
+    // QR numeric parsing uses decimal place-value accumulation.
+    private const int _decimalRadix = 10;
 
     private readonly BitBuffer _data;
+
+    // This table maps ASCII characters to QR alphanumeric mode values for O(1) encoding and validation.
+    private static readonly sbyte[] _alphanumericValues = CreateAlphanumericValues();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="QRSegment"/> class.
@@ -127,11 +138,7 @@ public sealed partial class QRSegment
     {
         ArgumentNullException.ThrowIfNull(bytes);
 
-        var buffer = new BitBuffer();
-        foreach (var value in bytes)
-        {
-            buffer.AppendBits(value, _byteModeBitsPerByte);
-        }
+        var buffer = BitBuffer.FromBytes(bytes);
 
         return new QRSegment(QRSegmentMode.Byte, bytes.Length, buffer);
     }
@@ -155,7 +162,7 @@ public sealed partial class QRSegment
         {
             var length = Math.Min(digits.Length - i, _numericModeDigitsPerGroup);
             buffer.AppendBits(
-                int.Parse(digits.AsSpan(i, length)),
+                ParseNumericValue(digits.AsSpan(i, length)),
                 (length * _numericModeBitsPerDigit) + _numericModeBitLengthOffset);
             i += length;
         }
@@ -181,14 +188,14 @@ public sealed partial class QRSegment
         var i = 0;
         for (; i <= text.Length - _alphanumericModeCharactersPerGroup; i += _alphanumericModeCharactersPerGroup)
         {
-            var value = (_alphanumericCharset.IndexOf(text[i], StringComparison.Ordinal) * _alphanumericModeRadix)
-                + _alphanumericCharset.IndexOf(text[i + 1], StringComparison.Ordinal);
+            var value = (GetAlphanumericValue(text[i]) * _alphanumericModeRadix)
+                + GetAlphanumericValue(text[i + 1]);
             buffer.AppendBits(value, _alphanumericModePairBitLength);
         }
 
         if (i < text.Length)
         {
-            buffer.AppendBits(_alphanumericCharset.IndexOf(text[i], StringComparison.Ordinal), _alphanumericModeSingleBitLength);
+            buffer.AppendBits(GetAlphanumericValue(text[i]), _alphanumericModeSingleBitLength);
         }
 
         return new QRSegment(QRSegmentMode.Alphanumeric, text.Length, buffer);
@@ -267,7 +274,15 @@ public sealed partial class QRSegment
     public static bool IsNumeric(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return NumericRegex().IsMatch(text);
+        foreach (var character in text.AsSpan())
+        {
+            if (character is < _minimumNumericCharacter or > _maximumNumericCharacter)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -278,7 +293,15 @@ public sealed partial class QRSegment
     public static bool IsAlphanumeric(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return AlphanumericRegex().IsMatch(text);
+        foreach (var character in text.AsSpan())
+        {
+            if (GetAlphanumericValue(character) < 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     internal BitBuffer GetData()
@@ -316,11 +339,33 @@ public sealed partial class QRSegment
         return _data;
     }
 
-    [GeneratedRegex(_numericPattern, RegexOptions.CultureInvariant)]
-    private static partial Regex NumericRegex();
+    private static int ParseNumericValue(ReadOnlySpan<char> digits)
+    {
+        var result = 0;
+        foreach (var digit in digits)
+        {
+            result = (result * _decimalRadix) + (digit - _minimumNumericCharacter);
+        }
 
-    [GeneratedRegex(_alphanumericPattern, RegexOptions.CultureInvariant)]
-    private static partial Regex AlphanumericRegex();
+        return result;
+    }
+
+    private static int GetAlphanumericValue(char character)
+    {
+        return character < _asciiCharacterCount ? _alphanumericValues[character] : _invalidAlphanumericValue;
+    }
+
+    private static sbyte[] CreateAlphanumericValues()
+    {
+        var result = new sbyte[_asciiCharacterCount];
+        Array.Fill(result, (sbyte)_invalidAlphanumericValue);
+        for (var i = 0; i < _alphanumericCharset.Length; i++)
+        {
+            result[_alphanumericCharset[i]] = (sbyte)i;
+        }
+
+        return result;
+    }
 }
 
 /// <summary>
