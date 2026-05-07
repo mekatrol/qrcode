@@ -13,6 +13,12 @@ public sealed class QRCodeGeneratorTests
     // The short text fixture is small enough to fit in a version 1 QR Code at low ECC.
     private const string _shortTextFixture = "HELLO WORLD";
 
+    // The numeric fixture includes leading zeroes so decode tests verify numeric group padding.
+    private const string _numericTextFixture = "007123";
+
+    // The byte text fixture contains lowercase letters, forcing byte-mode text encoding.
+    private const string _byteTextFixture = "hello world";
+
     // Stress tests are opt-in under this category because they generate a large number of symbols.
     private const string _stressCategory = "Stress";
 
@@ -265,6 +271,9 @@ public sealed class QRCodeGeneratorTests
 
     private readonly QRCodeGenerator _generator = new();
 
+    // The binary fixture includes low, high, and non-printable byte values to verify byte-mode decoding.
+    private static readonly byte[] _binaryFixture = [0x00, 0x10, 0x7F, 0xFF];
+
     // The number of ECC codewords in each block is fixed by QR version and ECC level, so table data stays grouped.
     private static readonly int[][] _errorCorrectionCodewordsPerBlock =
     [
@@ -331,6 +340,55 @@ public sealed class QRCodeGeneratorTests
     }
 
     [TestMethod]
+    public void DecodeTextReturnsOriginalNumericText()
+    {
+        var qrCode = _generator.EncodeText(_numericTextFixture, QRErrorCorrectionLevel.Low);
+
+        var result = _generator.DecodeText(qrCode);
+
+        Assert.AreEqual(_numericTextFixture, result);
+    }
+
+    [TestMethod]
+    public void DecodeTextReturnsOriginalAlphanumericText()
+    {
+        var qrCode = _generator.EncodeText(_shortTextFixture, QRErrorCorrectionLevel.Low);
+
+        var result = _generator.DecodeText(qrCode);
+
+        Assert.AreEqual(_shortTextFixture, result);
+    }
+
+    [TestMethod]
+    public void DecodeTextReturnsOriginalByteModeText()
+    {
+        var qrCode = _generator.EncodeText(_byteTextFixture, QRErrorCorrectionLevel.Medium);
+
+        var result = _generator.DecodeText(qrCode);
+
+        Assert.AreEqual(_byteTextFixture, result);
+        Assert.AreEqual(_byteTextFixture, DecodeByteModePayload(qrCode));
+    }
+
+    [TestMethod]
+    public void DecodeBinaryReturnsOriginalBytes()
+    {
+        var qrCode = _generator.EncodeBinary(_binaryFixture, QRErrorCorrectionLevel.Medium);
+
+        var result = _generator.DecodeBinary(qrCode);
+
+        CollectionAssert.AreEqual(_binaryFixture, result);
+    }
+
+    [TestMethod]
+    public void DecodeBinaryThrowsForNonByteModeData()
+    {
+        var qrCode = _generator.EncodeText(_shortTextFixture, QRErrorCorrectionLevel.Low);
+
+        Assert.ThrowsExactly<NotSupportedException>(() => _generator.DecodeBinary(qrCode));
+    }
+
+    [TestMethod]
     public void AddQRCodeGeneratorRegistersTransientService()
     {
         IServiceCollection services = new ServiceCollection();
@@ -361,7 +419,7 @@ public sealed class QRCodeGeneratorTests
             var expectedPayload = BuildProgramPayload(input);
             var qrCode = _generator.EncodeText(expectedPayload, QRErrorCorrectionLevel.Medium);
 
-            var actualPayload = DecodeByteModePayload(qrCode);
+            var actualPayload = _generator.DecodeText(qrCode);
             var actual = JsonSerializer.Deserialize<ProgramPayload>(actualPayload);
 
             Assert.IsNotNull(actual);

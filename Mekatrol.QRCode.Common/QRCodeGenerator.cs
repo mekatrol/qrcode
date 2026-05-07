@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 
 namespace Mekatrol.QRCode.Common;
 
@@ -271,6 +272,69 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     // Finder-like penalty patterns require a quiet light run four times the base width on either side.
     private const int _finderPenaltyQuietRunMultiplier = 4;
 
+    // The QR alphanumeric mode character set is fixed by ISO/IEC 18004 and maps base-45 values back to characters.
+    private const string _alphanumericCharset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+
+    // Numeric mode decodes up to 3 decimal digits from one bit group.
+    private const int _numericModeDigitsPerGroup = 3;
+
+    // Numeric mode encodes three digits in 10 bits.
+    private const int _numericModeFullGroupBitLength = 10;
+
+    // Numeric full groups must decode below 1000 because they represent exactly three decimal digits.
+    private const int _numericModeFullGroupValueLimit = 1_000;
+
+    // Numeric mode encodes two digits in 7 bits.
+    private const int _numericModeTwoDigitBitLength = 7;
+
+    // Numeric two-digit groups must decode below 100 because they represent exactly two decimal digits.
+    private const int _numericModeTwoDigitValueLimit = 100;
+
+    // Numeric mode encodes one digit in 4 bits.
+    private const int _numericModeSingleDigitBitLength = 4;
+
+    // Numeric single-digit groups must decode below 10 because they represent exactly one decimal digit.
+    private const int _numericModeSingleDigitValueLimit = 10;
+
+    // Numeric mode output pads decoded full groups to preserve leading zeroes.
+    private const string _numericModeFullGroupFormat = "D3";
+
+    // Numeric mode output pads decoded two-digit groups to preserve leading zeroes.
+    private const string _numericModeTwoDigitFormat = "D2";
+
+    // Alphanumeric mode packs two characters into one 11-bit base-45 value.
+    private const int _alphanumericModePairBitLength = 11;
+
+    // A trailing single alphanumeric character is stored in 6 bits.
+    private const int _alphanumericModeSingleBitLength = 6;
+
+    // Alphanumeric mode uses base 45 because its specification character set has 45 entries.
+    private const int _alphanumericModeRadix = 45;
+
+    // A zero mode indicator marks the end of the QR segment stream.
+    private const int _terminatorModeIndicator = 0;
+
+    // ECI assignment values below 2^7 use the shortest QR ECI encoding form.
+    private const int _singleByteEciAssignmentLimit = 1 << 7;
+
+    // The two-byte ECI prefix is identified by the leading bit pattern 10.
+    private const int _twoByteEciPrefix = 0b10;
+
+    // The three-byte ECI prefix is identified by the leading bit pattern 110.
+    private const int _threeByteEciPrefix = 0b110;
+
+    // Two-byte ECI designators carry 14 assignment-value bits after the prefix.
+    private const int _twoByteEciAssignmentBitLength = 14;
+
+    // Three-byte ECI designators carry the final 16 assignment-value bits after the first byte.
+    private const int _threeByteEciRemainingBitLength = 16;
+
+    // UTF-8 uses ECI assignment value 26 in QR Code ECI payloads.
+    private const int _utf8EciAssignmentValue = 26;
+
+    // ISO-8859-1 uses ECI assignment value 3 and is the QR default byte interpretation.
+    private const int _iso88591EciAssignmentValue = 3;
+
     // The exception text identifies QR versions outside the model 2 supported range.
     private const string _versionOutOfRangeMessage = "Version number out of range";
 
@@ -294,6 +358,18 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     // The exception text identifies invalid Reed-Solomon divisor degrees.
     private const string _degreeOutOfRangeMessage = "Degree out of range";
+
+    // The exception text identifies malformed QR payload bit streams.
+    private const string _invalidQrCodeDataMessage = "Invalid QR Code data";
+
+    // The exception text identifies QR modes this decoder intentionally does not interpret.
+    private const string _unsupportedSegmentModeMessage = "Unsupported QR segment mode";
+
+    // The exception text identifies non-byte payloads passed to binary decoding.
+    private const string _nonByteModeDataMessage = "QR Code contains non-byte-mode data";
+
+    // The exception text identifies byte payloads that use an unsupported ECI character set.
+    private const string _unsupportedEciAssignmentMessage = "Unsupported ECI assignment value";
 
     // Penalty rule N1 adds 3 points for each same-color run of five modules before longer-run increments.
     private const int _penaltyN1 = 3;
@@ -514,6 +590,67 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         return new QRCodeGenerator(version, errorCorrectionLevel, dataCodewords, mask).CreateQRCode();
     }
 
+    /// <summary>
+    /// Decodes a QR Code symbol into Unicode text.
+    /// </summary>
+    /// <param name="qrCode">The QR Code symbol to decode.</param>
+    /// <returns>The decoded text.</returns>
+    public string DecodeText(QRCodeSymbol qrCode)
+    {
+        ArgumentNullException.ThrowIfNull(qrCode);
+
+        var result = new StringBuilder();
+        var encoding = Encoding.UTF8;
+        foreach (var segment in DecodePayloadSegments(qrCode))
+        {
+            switch (segment.Mode)
+            {
+                case QRSegmentMode.Numeric:
+                case QRSegmentMode.Alphanumeric:
+                    result.Append(segment.Text);
+                    break;
+                case QRSegmentMode.Byte:
+                    result.Append(encoding.GetString(segment.Bytes));
+                    break;
+                case QRSegmentMode.Eci:
+                    encoding = GetEciEncoding(segment.AssignmentValue);
+                    break;
+                default:
+                    throw new NotSupportedException(_unsupportedSegmentModeMessage);
+            }
+        }
+
+        return result.ToString();
+    }
+
+    /// <summary>
+    /// Decodes byte-mode payload data from a QR Code symbol.
+    /// </summary>
+    /// <param name="qrCode">The QR Code symbol to decode.</param>
+    /// <returns>The decoded binary data.</returns>
+    public byte[] DecodeBinary(QRCodeSymbol qrCode)
+    {
+        ArgumentNullException.ThrowIfNull(qrCode);
+
+        using var result = new MemoryStream();
+        foreach (var segment in DecodePayloadSegments(qrCode))
+        {
+            if (segment.Mode == QRSegmentMode.Eci)
+            {
+                continue;
+            }
+
+            if (segment.Mode != QRSegmentMode.Byte)
+            {
+                throw new NotSupportedException(_nonByteModeDataMessage);
+            }
+
+            result.Write(segment.Bytes);
+        }
+
+        return result.ToArray();
+    }
+
     private QRCodeSymbol CreateQRCode()
     {
         return new QRCodeSymbol(Version, ErrorCorrectionLevel, Mask, _modules);
@@ -618,6 +755,364 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         }
 
         return result;
+    }
+
+    private static IReadOnlyList<DecodedSegment> DecodePayloadSegments(QRCodeSymbol qrCode)
+    {
+        var codewords = ExtractCodewords(qrCode);
+        var dataCodewords = DeinterleaveDataCodewords(codewords, qrCode.Version, qrCode.ErrorCorrectionLevel);
+        var reader = new BitReader(dataCodewords);
+        var result = new List<DecodedSegment>();
+
+        while (reader.RemainingBits >= _modeIndicatorBitLength)
+        {
+            var modeBits = reader.ReadBits(_modeIndicatorBitLength);
+            if (modeBits == _terminatorModeIndicator)
+            {
+                break;
+            }
+
+            var mode = QRSegmentModeExtensions.FromModeBits(modeBits);
+            if (mode == QRSegmentMode.Eci)
+            {
+                result.Add(DecodedSegment.ForEci(ReadEciAssignmentValue(reader)));
+                continue;
+            }
+
+            var characterCount = reader.ReadBits(mode.GetCharacterCountBits(qrCode.Version));
+            result.Add(mode switch
+            {
+                QRSegmentMode.Numeric => DecodedSegment.ForText(mode, DecodeNumericSegment(reader, characterCount)),
+                QRSegmentMode.Alphanumeric => DecodedSegment.ForText(mode, DecodeAlphanumericSegment(reader, characterCount)),
+                QRSegmentMode.Byte => DecodedSegment.ForBytes(ReadByteSegment(reader, characterCount)),
+                QRSegmentMode.Kanji => throw new NotSupportedException(_unsupportedSegmentModeMessage),
+                _ => throw new FormatException(_invalidQrCodeDataMessage),
+            });
+        }
+
+        return result;
+    }
+
+    private static string DecodeNumericSegment(BitReader reader, int characterCount)
+    {
+        var result = new StringBuilder(characterCount);
+        while (characterCount >= _numericModeDigitsPerGroup)
+        {
+            var value = reader.ReadBits(_numericModeFullGroupBitLength);
+            if (value >= _numericModeFullGroupValueLimit)
+            {
+                throw new FormatException(_invalidQrCodeDataMessage);
+            }
+
+            result.Append(value.ToString(_numericModeFullGroupFormat, CultureInfo.InvariantCulture));
+            characterCount -= _numericModeDigitsPerGroup;
+        }
+
+        if (characterCount == _dataPlacementColumnPairWidth)
+        {
+            var value = reader.ReadBits(_numericModeTwoDigitBitLength);
+            if (value >= _numericModeTwoDigitValueLimit)
+            {
+                throw new FormatException(_invalidQrCodeDataMessage);
+            }
+
+            result.Append(value.ToString(_numericModeTwoDigitFormat, CultureInfo.InvariantCulture));
+        }
+        else if (characterCount == _reedSolomonIdentity)
+        {
+            var value = reader.ReadBits(_numericModeSingleDigitBitLength);
+            if (value >= _numericModeSingleDigitValueLimit)
+            {
+                throw new FormatException(_invalidQrCodeDataMessage);
+            }
+
+            result.Append(value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return result.ToString();
+    }
+
+    private static string DecodeAlphanumericSegment(BitReader reader, int characterCount)
+    {
+        var result = new StringBuilder(characterCount);
+        while (characterCount >= _dataPlacementColumnPairWidth)
+        {
+            var value = reader.ReadBits(_alphanumericModePairBitLength);
+            if (value >= _alphanumericModeRadix * _alphanumericModeRadix)
+            {
+                throw new FormatException(_invalidQrCodeDataMessage);
+            }
+
+            result.Append(GetAlphanumericCharacter(value / _alphanumericModeRadix));
+            result.Append(GetAlphanumericCharacter(value % _alphanumericModeRadix));
+            characterCount -= _dataPlacementColumnPairWidth;
+        }
+
+        if (characterCount == _reedSolomonIdentity)
+        {
+            result.Append(GetAlphanumericCharacter(reader.ReadBits(_alphanumericModeSingleBitLength)));
+        }
+
+        return result.ToString();
+    }
+
+    private static char GetAlphanumericCharacter(int value)
+    {
+        if (value < 0 || value >= _alphanumericCharset.Length)
+        {
+            throw new FormatException(_invalidQrCodeDataMessage);
+        }
+
+        return _alphanumericCharset[value];
+    }
+
+    private static byte[] ReadByteSegment(BitReader reader, int byteCount)
+    {
+        var result = new byte[byteCount];
+        for (var i = 0; i < result.Length; i++)
+        {
+            result[i] = (byte)reader.ReadBits(_bitsPerByte);
+        }
+
+        return result;
+    }
+
+    private static int ReadEciAssignmentValue(BitReader reader)
+    {
+        var firstByte = reader.ReadBits(_bitsPerByte);
+        if (firstByte < _singleByteEciAssignmentLimit)
+        {
+            return firstByte;
+        }
+
+        if ((firstByte >>> (_bitsPerByte - _dataPlacementColumnPairWidth)) == _twoByteEciPrefix)
+        {
+            return ((firstByte & ((1 << (_bitsPerByte - _dataPlacementColumnPairWidth)) - _reedSolomonIdentity))
+                << _bitsPerByte)
+                | reader.ReadBits(_bitsPerByte);
+        }
+
+        if ((firstByte >>> (_bitsPerByte - _numericModeDigitsPerGroup)) == _threeByteEciPrefix)
+        {
+            return ((firstByte & ((1 << (_bitsPerByte - _numericModeDigitsPerGroup)) - _reedSolomonIdentity))
+                << _threeByteEciRemainingBitLength)
+                | reader.ReadBits(_threeByteEciRemainingBitLength);
+        }
+
+        throw new FormatException(_invalidQrCodeDataMessage);
+    }
+
+    private static Encoding GetEciEncoding(int assignmentValue)
+    {
+        return assignmentValue switch
+        {
+            _utf8EciAssignmentValue => Encoding.UTF8,
+            _iso88591EciAssignmentValue => Encoding.Latin1,
+            _ => throw new NotSupportedException(_unsupportedEciAssignmentMessage),
+        };
+    }
+
+    private static byte[] ExtractCodewords(QRCodeSymbol qrCode)
+    {
+        var isFunction = CreateFunctionMask(qrCode.Version);
+        var result = new byte[GetNumRawDataModules(qrCode.Version) / _bitsPerByte];
+        var bitIndex = 0;
+
+        for (var right = qrCode.Size - _reedSolomonIdentity;
+            right >= _reedSolomonIdentity;
+            right -= _dataPlacementColumnPairWidth)
+        {
+            if (right == _dataPlacementTimingColumn)
+            {
+                right = _dataPlacementColumnBeforeTiming;
+            }
+
+            for (var vertical = 0; vertical < qrCode.Size; vertical++)
+            {
+                for (var j = 0; j < _dataPlacementColumnPairWidth; j++)
+                {
+                    var x = right - j;
+                    var upward = ((right + _reedSolomonIdentity) & _dataPlacementDirectionMask) == 0;
+                    var y = upward ? qrCode.Size - _reedSolomonIdentity - vertical : vertical;
+                    if (!isFunction[y][x] && bitIndex < result.Length * _bitsPerByte)
+                    {
+                        var bit = qrCode.GetModule(x, y) ^ MaskApplies(qrCode.Mask, x, y);
+                        result[bitIndex >>> _bitIndexToByteShift] |= (byte)((bit ? _reedSolomonIdentity : 0)
+                            << (_highestBitIndexInByte - (bitIndex & _bitIndexInByteMask)));
+                        bitIndex++;
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static byte[] DeinterleaveDataCodewords(byte[] codewords, int version, QRErrorCorrectionLevel errorCorrectionLevel)
+    {
+        var numBlocks = _errorCorrectionBlocks[(int)errorCorrectionLevel][version];
+        var blockEccLength = _errorCorrectionCodewordsPerBlock[(int)errorCorrectionLevel][version];
+        var rawCodewords = GetNumRawDataModules(version) / _bitsPerByte;
+        var numShortBlocks = numBlocks - (rawCodewords % numBlocks);
+        var shortBlockLength = rawCodewords / numBlocks;
+        var blocks = new byte[numBlocks][];
+        for (var i = 0; i < blocks.Length; i++)
+        {
+            blocks[i] = new byte[shortBlockLength + _reedSolomonIdentity];
+        }
+
+        for (int i = 0, k = 0; i < blocks[0].Length; i++)
+        {
+            for (var j = 0; j < blocks.Length; j++)
+            {
+                if (i != shortBlockLength - blockEccLength || j >= numShortBlocks)
+                {
+                    blocks[j][i] = codewords[k];
+                    k++;
+                }
+            }
+        }
+
+        var result = new byte[GetNumDataCodewords(version, errorCorrectionLevel)];
+        var offset = 0;
+        for (var i = 0; i < blocks.Length; i++)
+        {
+            var dataLength = shortBlockLength
+                - blockEccLength
+                + (i < numShortBlocks ? 0 : _reedSolomonIdentity);
+            Array.Copy(blocks[i], 0, result, offset, dataLength);
+            offset += dataLength;
+        }
+
+        return result;
+    }
+
+    private static bool[][] CreateFunctionMask(int version)
+    {
+        var size = QRCodeSymbol.CalculateSize(version);
+        var result = CreateGrid(size);
+        for (var i = 0; i < size; i++)
+        {
+            result[i][_timingPatternCoordinate] = true;
+            result[_timingPatternCoordinate][i] = true;
+        }
+
+        DrawFinderFunctionPattern(result, _finderPatternCenterOffset, _finderPatternCenterOffset);
+        DrawFinderFunctionPattern(result, size - _finderPatternFarEdgeOffset, _finderPatternCenterOffset);
+        DrawFinderFunctionPattern(result, _finderPatternCenterOffset, size - _finderPatternFarEdgeOffset);
+
+        var alignPatternPositions = GetAlignmentPatternPositions(version);
+        for (var i = 0; i < alignPatternPositions.Length; i++)
+        {
+            for (var j = 0; j < alignPatternPositions.Length; j++)
+            {
+                if (!((i == 0 && j == 0)
+                    || (i == 0 && j == alignPatternPositions.Length - _reedSolomonIdentity)
+                    || (i == alignPatternPositions.Length - _reedSolomonIdentity && j == 0)))
+                {
+                    DrawAlignmentFunctionPattern(result, alignPatternPositions[i], alignPatternPositions[j]);
+                }
+            }
+        }
+
+        DrawFormatFunctionModules(result);
+        DrawVersionFunctionModules(result, version);
+        return result;
+    }
+
+    private static void DrawFinderFunctionPattern(bool[][] isFunction, int x, int y)
+    {
+        for (var dy = -_finderPatternRadius; dy <= _finderPatternRadius; dy++)
+        {
+            for (var dx = -_finderPatternRadius; dx <= _finderPatternRadius; dx++)
+            {
+                var xx = x + dx;
+                var yy = y + dy;
+                if (0 <= xx && xx < isFunction.Length && 0 <= yy && yy < isFunction.Length)
+                {
+                    isFunction[yy][xx] = true;
+                }
+            }
+        }
+    }
+
+    private static void DrawAlignmentFunctionPattern(bool[][] isFunction, int x, int y)
+    {
+        for (var dy = -_alignmentPatternRadius; dy <= _alignmentPatternRadius; dy++)
+        {
+            for (var dx = -_alignmentPatternRadius; dx <= _alignmentPatternRadius; dx++)
+            {
+                isFunction[y + dy][x + dx] = true;
+            }
+        }
+    }
+
+    private static void DrawFormatFunctionModules(bool[][] isFunction)
+    {
+        var size = isFunction.Length;
+        for (var i = 0; i <= _formatFirstVerticalRunLastBit; i++)
+        {
+            isFunction[i][_finderPatternRawRegionModulesPerSide] = true;
+        }
+
+        isFunction[_highestBitIndexInByte][_finderPatternRawRegionModulesPerSide] = true;
+        isFunction[_finderPatternRawRegionModulesPerSide][_finderPatternRawRegionModulesPerSide] = true;
+        isFunction[_finderPatternRawRegionModulesPerSide][_highestBitIndexInByte] = true;
+        for (var i = _formatSecondRunFirstBit; i <= _formatLastBit; i++)
+        {
+            isFunction[_finderPatternRawRegionModulesPerSide][_formatMirrorCoordinateBase - i] = true;
+        }
+
+        for (var i = 0; i < _bitsPerByte; i++)
+        {
+            isFunction[_finderPatternRawRegionModulesPerSide][size - _reedSolomonIdentity - i] = true;
+        }
+
+        for (var i = _formatSecondVerticalRunFirstBit; i <= _formatLastBit; i++)
+        {
+            isFunction[size - _formatBitLength + i][_finderPatternRawRegionModulesPerSide] = true;
+        }
+
+        isFunction[size - _darkModuleBottomOffset][_finderPatternRawRegionModulesPerSide] = true;
+    }
+
+    private static void DrawVersionFunctionModules(bool[][] isFunction, int version)
+    {
+        if (version < _minimumVersionWithVersionInformation)
+        {
+            return;
+        }
+
+        var size = isFunction.Length;
+        for (var i = 0; i < _versionInformationBitLength; i++)
+        {
+            var a = size - _versionInformationFarEdgeOffset + (i % _versionInformationColumnCount);
+            var b = i / _versionInformationColumnCount;
+            isFunction[b][a] = true;
+            isFunction[a][b] = true;
+        }
+    }
+
+    private static bool MaskApplies(int mask, int x, int y)
+    {
+        return mask switch
+        {
+            _maskPattern0 => (x + y) % _dataPlacementColumnPairWidth == 0,
+            _maskPattern1 => y % _dataPlacementColumnPairWidth == 0,
+            _maskPattern2 => x % _versionInformationColumnCount == 0,
+            _maskPattern3 => (x + y) % _versionInformationColumnCount == 0,
+            _maskPattern4 => ((x / _versionInformationColumnCount) + (y / _dataPlacementColumnPairWidth))
+                % _dataPlacementColumnPairWidth == 0,
+            _maskPattern5 => ((x * y) % _dataPlacementColumnPairWidth)
+                + ((x * y) % _versionInformationColumnCount) == 0,
+            _maskPattern6 => (((x * y) % _dataPlacementColumnPairWidth)
+                + ((x * y) % _versionInformationColumnCount))
+                % _dataPlacementColumnPairWidth == 0,
+            _maskPattern7 => (((x + y) % _dataPlacementColumnPairWidth)
+                + ((x * y) % _versionInformationColumnCount))
+                % _dataPlacementColumnPairWidth == 0,
+            _ => throw new ArgumentOutOfRangeException(nameof(mask), _maskOutOfRangeMessage),
+        };
     }
 
     private static int ReedSolomonMultiply(int x, int y)
@@ -987,20 +1482,26 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     private int[] GetAlignmentPatternPositions()
     {
-        if (Version == _firstVersionWithoutAlignmentPatterns)
+        return GetAlignmentPatternPositions(Version);
+    }
+
+    private static int[] GetAlignmentPatternPositions(int version)
+    {
+        if (version == _firstVersionWithoutAlignmentPatterns)
         {
             return [];
         }
 
-        var numAlign = (Version / _alignmentPatternVersionDivisor) + _alignmentPatternMinimumCentersPerAxis;
-        var step = (((Version * _alignmentPositionVersionMultiplier)
+        var numAlign = (version / _alignmentPatternVersionDivisor) + _alignmentPatternMinimumCentersPerAxis;
+        var step = (((version * _alignmentPositionVersionMultiplier)
                 + (numAlign * _alignmentPositionCenterMultiplier)
                 + _alignmentPositionRoundingBias)
             / ((numAlign * _alignmentPositionGapMultiplier) - _alignmentPositionGapMultiplier))
             * _alignmentPositionEvenStepMultiplier;
         var result = new int[numAlign];
         result[0] = _alignmentPatternFirstPosition;
-        for (int i = result.Length - _reedSolomonIdentity, position = Size - _alignmentPatternFarEdgeOffset;
+        var size = QRCodeSymbol.CalculateSize(version);
+        for (int i = result.Length - _reedSolomonIdentity, position = size - _alignmentPatternFarEdgeOffset;
             i >= _reedSolomonIdentity;
             i--, position -= step)
         {
@@ -1053,6 +1554,54 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
         runHistory[..^1].CopyTo(runHistory[1..]);
         runHistory[0] = currentRunLength;
+    }
+
+    private sealed record DecodedSegment(
+        QRSegmentMode Mode,
+        string Text,
+        byte[] Bytes,
+        int AssignmentValue)
+    {
+        public static DecodedSegment ForText(QRSegmentMode mode, string text)
+        {
+            return new DecodedSegment(mode, text, [], 0);
+        }
+
+        public static DecodedSegment ForBytes(byte[] bytes)
+        {
+            return new DecodedSegment(QRSegmentMode.Byte, string.Empty, bytes, 0);
+        }
+
+        public static DecodedSegment ForEci(int assignmentValue)
+        {
+            return new DecodedSegment(QRSegmentMode.Eci, string.Empty, [], assignmentValue);
+        }
+    }
+
+    private sealed class BitReader(byte[] data)
+    {
+        private int _index;
+
+        public int RemainingBits => (data.Length * _bitsPerByte) - _index;
+
+        public int ReadBits(int length)
+        {
+            if (length < 0 || length > RemainingBits)
+            {
+                throw new FormatException(_invalidQrCodeDataMessage);
+            }
+
+            var result = 0;
+            for (var i = 0; i < length; i++)
+            {
+                result = (result << _reedSolomonIdentity)
+                    | ((data[_index >>> _bitIndexToByteShift]
+                        >>> (_highestBitIndexInByte - (_index & _bitIndexInByteMask))) & _reedSolomonIdentity);
+                _index++;
+            }
+
+            return result;
+        }
     }
 }
 

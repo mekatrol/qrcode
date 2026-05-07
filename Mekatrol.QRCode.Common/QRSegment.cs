@@ -446,6 +446,19 @@ internal static class QRSegmentModeExtensions
         };
     }
 
+    public static QRSegmentMode FromModeBits(int modeBits)
+    {
+        return modeBits switch
+        {
+            _numericModeIndicator => QRSegmentMode.Numeric,
+            _alphanumericModeIndicator => QRSegmentMode.Alphanumeric,
+            _byteModeIndicator => QRSegmentMode.Byte,
+            _kanjiModeIndicator => QRSegmentMode.Kanji,
+            _eciModeIndicator => QRSegmentMode.Eci,
+            _ => throw new FormatException(_invalidSegmentModeMessage),
+        };
+    }
+
     public static int GetCharacterCountBits(this QRSegmentMode mode, int version)
     {
         if (version < QRCodeGenerator.MinVersion || version > QRCodeGenerator.MaxVersion)

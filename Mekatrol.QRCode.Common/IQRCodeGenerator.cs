@@ -46,4 +46,18 @@ public interface IQRCodeGenerator
         int maxVersion,
         int mask,
         bool boostErrorCorrectionLevel);
+
+    /// <summary>
+    /// Decodes a QR Code symbol into Unicode text.
+    /// </summary>
+    /// <param name="qrCode">The QR Code symbol to decode.</param>
+    /// <returns>The decoded text.</returns>
+    string DecodeText(QRCodeSymbol qrCode);
+
+    /// <summary>
+    /// Decodes byte-mode payload data from a QR Code symbol.
+    /// </summary>
+    /// <param name="qrCode">The QR Code symbol to decode.</param>
+    /// <returns>The decoded binary data.</returns>
+    byte[] DecodeBinary(QRCodeSymbol qrCode);
 }
