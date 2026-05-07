@@ -1,4 +1,6 @@
 ﻿using Mekatrol.QRCode.Common;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,17 +9,30 @@ namespace Mekatrol.QRCode.GeneratorApp;
 
 internal static class Program
 {
+    private static void Main(string[] args)
+    {
+        var builder = Host.CreateApplicationBuilder(args);
+        builder.Services.AddQRCodeGenerator();
+        builder.Services.AddTransient<GeneratorApplication>();
+
+        using var host = builder.Build();
+        host.Services.GetRequiredService<GeneratorApplication>().Run();
+    }
+}
+
+internal sealed class GeneratorApplication(IQRCodeGenerator qrCodeGenerator)
+{
     private const int _quietZoneModules = 4;
     private const int _maximumTextLength = 100;
     private const string _year = "2026";
     private const string _month = "0005";
     private const string _text = "sample text";
 
-    private static void Main()
+    public void Run()
     {
         var input = CreateInput();
         var payload = BuildPayload(input);
-        var qrCode = new QRCodeGenerator().EncodeText(payload, QRErrorCorrectionLevel.Medium);
+        var qrCode = qrCodeGenerator.EncodeText(payload, QRErrorCorrectionLevel.Medium);
 
         Console.WriteLine(payload);
         Console.WriteLine();
