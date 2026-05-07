@@ -1,0 +1,6 @@
+{
+  "dotnet.defaultSolution": "Mekatrol.QRCode.slnx",
+  "dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true,
+  "omnisharp.enableRoslynAnalyzers": true,
+  "omnisharp.enableEditorConfigSupport": true
+}

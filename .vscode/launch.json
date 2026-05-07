@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug QR Generator App",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/Mekatrol.QRCode.GeneratorApp/bin/Debug/net10.0/Mekatrol.QRCode.GeneratorApp.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "justMyCode": true
+    },
+    {
+      "name": "Debug Tests",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/Mekatrol.QRCode.Test/Mekatrol.QRCode.Test.csproj",
+        "--no-build"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "justMyCode": true
+    }
+  ]
+}
