@@ -14,6 +14,29 @@ All projects currently target `.NET 10.0` with nullable reference types and impl
 
 `Mekatrol.QRCode.Common` contains a C# QR Code generator implementation based on Project Nayuki's QR Code generator library. The implementation follows the same core model used by Nayuki's Java source: QR code generation from text, binary data, or explicit segments; all standard Model 2 versions from 1 through 40; the four standard error correction levels; automatic mask selection; and raw module access for rendering by callers.
 
+The public API separates generation from the generated symbol:
+
+- `IQRCodeGenerator` / `QRCodeGenerator` generate QR code symbols.
+- `QRCodeSymbol` is the immutable generated model with version, size, mask, error correction level, and module access.
+
+Register the generator with dependency injection using transient scope:
+
+```csharp
+services.AddQRCodeGenerator();
+```
+
+Then inject `IQRCodeGenerator` and encode data:
+
+```csharp
+public sealed class Example(IQRCodeGenerator generator)
+{
+    public QRCodeSymbol Create(string text)
+    {
+        return generator.EncodeText(text, QRErrorCorrectionLevel.Medium);
+    }
+}
+```
+
 References:
 
 - Nayuki QR Code generator library, Java fast notes: <https://www.nayuki.io/page/qr-code-generator-library#java-fast>

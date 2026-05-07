@@ -17,7 +17,7 @@ internal static class Program
     {
         var input = CreateInput();
         var payload = BuildPayload(input);
-        var qrCode = QRCodeGenerator.EncodeText(payload, QRErrorCorrectionLevel.Medium);
+        var qrCode = new QRCodeGenerator().EncodeText(payload, QRErrorCorrectionLevel.Medium);
 
         Console.WriteLine(payload);
         Console.WriteLine();
@@ -90,7 +90,7 @@ internal static class Program
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    private static void WriteQrCode(QRCodeGenerator qrCode)
+    private static void WriteQrCode(QRCodeSymbol qrCode)
     {
         for (var y = -_quietZoneModules; y < qrCode.Size + _quietZoneModules; y++)
         {

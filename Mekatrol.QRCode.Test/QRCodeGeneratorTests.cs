@@ -1,4 +1,5 @@
 using Mekatrol.QRCode.Common;
+using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -11,6 +12,7 @@ public sealed class QRCodeGeneratorTests
 {
     private const int _stressQrCodeCount = 1_000_000;
     private const int _maximumTextLength = 100;
+    private readonly QRCodeGenerator _generator = new();
 
     private static readonly int[][] _errorCorrectionCodewordsPerBlock =
     [
@@ -31,7 +33,7 @@ public sealed class QRCodeGeneratorTests
     [TestMethod]
     public void EncodeTextCreatesVersionOneQRCodeForShortText()
     {
-        var qrCode = QRCodeGenerator.EncodeText("HELLO WORLD", QRErrorCorrectionLevel.Low);
+        var qrCode = _generator.EncodeText("HELLO WORLD", QRErrorCorrectionLevel.Low);
 
         Assert.AreEqual(1, qrCode.Version);
         Assert.AreEqual(21, qrCode.Size);
@@ -41,7 +43,7 @@ public sealed class QRCodeGeneratorTests
     [TestMethod]
     public void GetModuleReturnsFalseForOutOfBoundsCoordinates()
     {
-        var qrCode = QRCodeGenerator.EncodeText("HELLO WORLD", QRErrorCorrectionLevel.Low);
+        var qrCode = _generator.EncodeText("HELLO WORLD", QRErrorCorrectionLevel.Low);
 
         Assert.IsFalse(qrCode.GetModule(-1, 0));
         Assert.IsFalse(qrCode.GetModule(0, -1));
@@ -52,7 +54,7 @@ public sealed class QRCodeGeneratorTests
     [TestMethod]
     public void FinderPatternTopLeftIsDrawn()
     {
-        var qrCode = QRCodeGenerator.EncodeText("HELLO WORLD", QRErrorCorrectionLevel.Low);
+        var qrCode = _generator.EncodeText("HELLO WORLD", QRErrorCorrectionLevel.Low);
 
         Assert.IsTrue(qrCode.GetModule(0, 0));
         Assert.IsTrue(qrCode.GetModule(3, 3));
@@ -66,7 +68,21 @@ public sealed class QRCodeGeneratorTests
         var segment = QRSegment.MakeBytes(new byte[32]);
 
         Assert.ThrowsExactly<DataTooLongException>(() =>
-            QRCodeGenerator.EncodeSegments([segment], QRErrorCorrectionLevel.High, 1, 1, -1, false));
+            _generator.EncodeSegments([segment], QRErrorCorrectionLevel.High, 1, 1, -1, false));
+    }
+
+    [TestMethod]
+    public void AddQRCodeGeneratorRegistersTransientService()
+    {
+        IServiceCollection services = new ServiceCollection();
+
+        var result = services.AddQRCodeGenerator();
+
+        Assert.AreSame(services, result);
+        Assert.IsTrue(services.Any(service =>
+            service.ServiceType == typeof(IQRCodeGenerator)
+            && service.ImplementationType == typeof(QRCodeGenerator)
+            && service.Lifetime == ServiceLifetime.Transient));
     }
 
     [TestMethod]
@@ -84,7 +100,7 @@ public sealed class QRCodeGeneratorTests
         {
             var input = CreateRandomProgramInput(random);
             var expectedPayload = BuildProgramPayload(input);
-            var qrCode = QRCodeGenerator.EncodeText(expectedPayload, QRErrorCorrectionLevel.Medium);
+            var qrCode = _generator.EncodeText(expectedPayload, QRErrorCorrectionLevel.Medium);
 
             var actualPayload = DecodeByteModePayload(qrCode);
             var actual = JsonSerializer.Deserialize<ProgramPayload>(actualPayload);
@@ -137,7 +153,7 @@ public sealed class QRCodeGeneratorTests
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    private static string DecodeByteModePayload(QRCodeGenerator qrCode)
+    private static string DecodeByteModePayload(QRCodeSymbol qrCode)
     {
         var codewords = ExtractCodewords(qrCode);
         var dataCodewords = DeinterleaveDataCodewords(codewords, qrCode.Version, qrCode.ErrorCorrectionLevel);
@@ -154,7 +170,7 @@ public sealed class QRCodeGeneratorTests
         return Encoding.UTF8.GetString(bytes);
     }
 
-    private static byte[] ExtractCodewords(QRCodeGenerator qrCode)
+    private static byte[] ExtractCodewords(QRCodeSymbol qrCode)
     {
         var isFunction = CreateFunctionMask(qrCode.Version);
         var result = new byte[GetNumRawDataModules(qrCode.Version) / 8];

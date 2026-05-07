@@ -1,9 +1,9 @@
 namespace Mekatrol.QRCode.Common;
 
 /// <summary>
-/// A QR Code symbol represented as an immutable square grid of dark and light modules.
+/// Generates QR Code symbols from text, binary data, or explicit segments.
 /// </summary>
-public sealed class QRCodeGenerator
+public sealed class QRCodeGenerator : IQRCodeGenerator
 {
     /// <summary>The minimum version number supported in the QR Code Model 2 standard.</summary>
     public const int MinVersion = 1;
@@ -32,17 +32,17 @@ public sealed class QRCodeGenerator
         [-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81],
     ];
 
-    private readonly bool[][] _modules;
+    private bool[][] _modules = [];
     private bool[][]? _isFunction;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="QRCodeGenerator"/> class.
     /// </summary>
-    /// <param name="version">The version number to use.</param>
-    /// <param name="errorCorrectionLevel">The error correction level to use.</param>
-    /// <param name="dataCodewords">The data codewords, excluding error correction codewords.</param>
-    /// <param name="mask">The mask pattern, or -1 for automatic choice.</param>
-    public QRCodeGenerator(int version, QRErrorCorrectionLevel errorCorrectionLevel, byte[] dataCodewords, int mask)
+    public QRCodeGenerator()
+    {
+    }
+
+    private QRCodeGenerator(int version, QRErrorCorrectionLevel errorCorrectionLevel, byte[] dataCodewords, int mask)
     {
         if (version < MinVersion || version > MaxVersion)
         {
@@ -57,7 +57,7 @@ public sealed class QRCodeGenerator
         ArgumentNullException.ThrowIfNull(dataCodewords);
 
         Version = version;
-        Size = (version * 4) + 17;
+        Size = QRCodeSymbol.CalculateSize(version);
         ErrorCorrectionLevel = errorCorrectionLevel;
         _modules = CreateGrid(Size);
         _isFunction = CreateGrid(Size);
@@ -90,25 +90,13 @@ public sealed class QRCodeGenerator
         _isFunction = null;
     }
 
-    /// <summary>
-    /// Gets the version number of this QR Code.
-    /// </summary>
-    public int Version { get; }
+    private int Version { get; }
 
-    /// <summary>
-    /// Gets the width and height of this QR Code, measured in modules.
-    /// </summary>
-    public int Size { get; }
+    private int Size { get; }
 
-    /// <summary>
-    /// Gets the error correction level used in this QR Code.
-    /// </summary>
-    public QRErrorCorrectionLevel ErrorCorrectionLevel { get; }
+    private QRErrorCorrectionLevel ErrorCorrectionLevel { get; }
 
-    /// <summary>
-    /// Gets the mask pattern used in this QR Code.
-    /// </summary>
-    public int Mask { get; }
+    private int Mask { get; }
 
     /// <summary>
     /// Returns a QR Code representing the specified Unicode text.
@@ -116,7 +104,7 @@ public sealed class QRCodeGenerator
     /// <param name="text">The text to encode.</param>
     /// <param name="errorCorrectionLevel">The error correction level to use.</param>
     /// <returns>A QR Code representing the text.</returns>
-    public static QRCodeGenerator EncodeText(string text, QRErrorCorrectionLevel errorCorrectionLevel)
+    public QRCodeSymbol EncodeText(string text, QRErrorCorrectionLevel errorCorrectionLevel)
     {
         ArgumentNullException.ThrowIfNull(text);
         return EncodeSegments(QRSegment.MakeSegments(text), errorCorrectionLevel);
@@ -128,7 +116,7 @@ public sealed class QRCodeGenerator
     /// <param name="data">The binary data to encode.</param>
     /// <param name="errorCorrectionLevel">The error correction level to use.</param>
     /// <returns>A QR Code representing the data.</returns>
-    public static QRCodeGenerator EncodeBinary(byte[] data, QRErrorCorrectionLevel errorCorrectionLevel)
+    public QRCodeSymbol EncodeBinary(byte[] data, QRErrorCorrectionLevel errorCorrectionLevel)
     {
         ArgumentNullException.ThrowIfNull(data);
         return EncodeSegments([QRSegment.MakeBytes(data)], errorCorrectionLevel);
@@ -140,7 +128,7 @@ public sealed class QRCodeGenerator
     /// <param name="segments">The segments to encode.</param>
     /// <param name="errorCorrectionLevel">The error correction level to use.</param>
     /// <returns>A QR Code representing the segments.</returns>
-    public static QRCodeGenerator EncodeSegments(IReadOnlyCollection<QRSegment> segments, QRErrorCorrectionLevel errorCorrectionLevel)
+    public QRCodeSymbol EncodeSegments(IReadOnlyCollection<QRSegment> segments, QRErrorCorrectionLevel errorCorrectionLevel)
     {
         return EncodeSegments(segments, errorCorrectionLevel, MinVersion, MaxVersion, -1, true);
     }
@@ -155,7 +143,7 @@ public sealed class QRCodeGenerator
     /// <param name="mask">The mask number, or -1 for automatic choice.</param>
     /// <param name="boostErrorCorrectionLevel">Whether to increase the ECC level if it still fits.</param>
     /// <returns>A QR Code representing the segments.</returns>
-    public static QRCodeGenerator EncodeSegments(
+    public QRCodeSymbol EncodeSegments(
         IReadOnlyCollection<QRSegment> segments,
         QRErrorCorrectionLevel errorCorrectionLevel,
         int minVersion,
@@ -224,18 +212,12 @@ public sealed class QRCodeGenerator
             dataCodewords[i >>> 3] |= (byte)(buffer.GetBit(i) << (7 - (i & 7)));
         }
 
-        return new QRCodeGenerator(version, errorCorrectionLevel, dataCodewords, mask);
+        return new QRCodeGenerator(version, errorCorrectionLevel, dataCodewords, mask).CreateQRCode();
     }
 
-    /// <summary>
-    /// Returns the color of the module at the specified coordinates.
-    /// </summary>
-    /// <param name="x">The x coordinate.</param>
-    /// <param name="y">The y coordinate.</param>
-    /// <returns><see langword="true"/> if the module is dark; otherwise <see langword="false"/>.</returns>
-    public bool GetModule(int x, int y)
+    private QRCodeSymbol CreateQRCode()
     {
-        return 0 <= x && x < Size && 0 <= y && y < Size && _modules[y][x];
+        return new QRCodeSymbol(Version, ErrorCorrectionLevel, Mask, _modules);
     }
 
     internal static bool GetBit(int value, int index)
@@ -268,7 +250,7 @@ public sealed class QRCodeGenerator
             throw new ArgumentOutOfRangeException(nameof(version), "Version number out of range");
         }
 
-        var size = (version * 4) + 17;
+        var size = QRCodeSymbol.CalculateSize(version);
         var result = size * size;
         result -= 8 * 8 * 3;
         result -= (15 * 2) + 1;
