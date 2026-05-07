@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Mekatrol.QRCode.Common;
 
 /// <summary>
@@ -11,11 +13,301 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     /// <summary>The maximum version number supported in the QR Code Model 2 standard.</summary>
     public const int MaxVersion = 40;
 
+    // The value that asks the encoder to choose the mask pattern with the lowest penalty score.
+    private const int _automaticMask = -1;
+
+    // QR Code mask pattern numbers start at 0.
+    private const int _minimumMask = 0;
+
+    // QR Code Model 2 defines exactly eight mask patterns, numbered 0 through 7.
+    private const int _maximumMask = 7;
+
+    // Mask pattern 0 inverts modules where (x + y) is divisible by 2.
+    private const int _maskPattern0 = 0;
+
+    // Mask pattern 1 inverts modules where y is divisible by 2.
+    private const int _maskPattern1 = 1;
+
+    // Mask pattern 2 inverts modules where x is divisible by 3.
+    private const int _maskPattern2 = 2;
+
+    // Mask pattern 3 inverts modules where (x + y) is divisible by 3.
+    private const int _maskPattern3 = 3;
+
+    // Mask pattern 4 inverts modules using the QR mixed row/column block formula.
+    private const int _maskPattern4 = 4;
+
+    // Mask pattern 5 inverts modules using the QR product modulo sum formula.
+    private const int _maskPattern5 = 5;
+
+    // Mask pattern 6 inverts modules using mask pattern 5 reduced modulo 2.
+    private const int _maskPattern6 = 6;
+
+    // Mask pattern 7 inverts modules using the QR coordinate-sum/product mixed formula.
+    private const int _maskPattern7 = 7;
+
+    // One byte contains 8 bits and QR codewords are byte-sized.
+    private const int _bitsPerByte = 8;
+
+    // Segment headers use a 4-bit mode indicator before the character count and payload data.
+    private const int _modeIndicatorBitLength = QRSegment.ModeIndicatorBitLength;
+
+    // Four terminator bits are added when capacity remains after all QR data segments.
+    private const int _terminatorBitLength = 4;
+
+    // The first alternating pad codeword required by ISO/IEC 18004 data padding.
+    private const int _padCodewordFirst = 0xEC;
+
+    // The second alternating pad codeword required by ISO/IEC 18004 data padding.
+    private const int _padCodewordSecond = 0x11;
+
+    // The right shift from a bit index to its containing byte index.
+    private const int _bitIndexToByteShift = 3;
+
+    // The mask for a bit index within one byte.
+    private const int _bitIndexInByteMask = 7;
+
+    // The highest bit position in a byte, used when packing bits in most-significant-bit order.
+    private const int _highestBitIndexInByte = 7;
+
+    // The finder pattern occupies an 8 by 8 function region in the raw-module count calculation.
+    private const int _finderPatternRawRegionModulesPerSide = 8;
+
+    // There are three finder pattern regions in a QR Code symbol.
+    private const int _finderPatternCount = 3;
+
+    // Format information has 15 bits.
+    private const int _formatBitLength = 15;
+
+    // Format information is written in two locations.
+    private const int _formatInformationCopyCount = 2;
+
+    // The fixed dark module contributes one module in the raw-module count calculation.
+    private const int _darkModuleCount = 1;
+
+    // Timing patterns reserve two lines after subtracting the overlapping finder pattern regions.
+    private const int _timingPatternLineCount = 2;
+
+    // Timing patterns begin after the finder pattern border, leaving 16 modules excluded at both ends.
+    private const int _timingPatternExcludedEndModules = 16;
+
+    // Alignment pattern center count grows by one every seven QR versions.
+    private const int _alignmentPatternVersionDivisor = 7;
+
+    // Version 2 starts with two alignment pattern centers per axis.
+    private const int _alignmentPatternMinimumCentersPerAxis = 2;
+
+    // One alignment pattern's raw function region is 5 by 5 modules.
+    private const int _alignmentPatternModulesPerSide = 5;
+
+    // Two alignment positions overlap finder timing zones in the raw-module count formula.
+    private const int _alignmentPatternTimingOverlapCount = 2;
+
+    // One alignment/timing overlap contributes 20 modules in the raw-module count formula.
+    private const int _alignmentPatternTimingOverlapModules = 20;
+
+    // Version information exists only for QR versions 7 and above.
+    private const int _minimumVersionWithVersionInformation = 7;
+
+    // Version information has 6 rows or columns in each placement area.
+    private const int _versionInformationShortSide = 6;
+
+    // Version information has 3 columns or rows in each placement area.
+    private const int _versionInformationLongSide = 3;
+
+    // Version information is written in two placement areas.
+    private const int _versionInformationCopyCount = 2;
+
+    // Reed-Solomon divisor degrees are byte-polynomial degrees and must fit in a byte-sized field.
+    private const int _reedSolomonMaximumDegree = 255;
+
+    // The first Reed-Solomon divisor coefficient is initialized to the multiplicative identity.
+    private const int _reedSolomonIdentity = 1;
+
+    // Reed-Solomon generator roots advance by multiplying by 2 in GF(2^8).
+    private const int _reedSolomonGeneratorRootFactor = 0x02;
+
+    // Reed-Solomon multiplication iterates across the 8 bits of a byte.
+    private const int _reedSolomonBitCount = 8;
+
+    // The reducing polynomial x^8 + x^4 + x^3 + x^2 + 1 used by QR Reed-Solomon arithmetic.
+    private const int _reedSolomonReducingPolynomial = 0x11D;
+
+    // The x coordinate of both QR timing patterns is 6 where they cross the finder separators.
+    private const int _timingPatternCoordinate = 6;
+
+    // Finder pattern centers are 3 modules in from the symbol edge.
+    private const int _finderPatternCenterOffset = 3;
+
+    // Finder pattern centers at the far edge are 4 modules back from the symbol size.
+    private const int _finderPatternFarEdgeOffset = 4;
+
+    // The format BCH remainder has 10 bits.
+    private const int _formatRemainderBitLength = 10;
+
+    // The top bit index of the format BCH remainder during division.
+    private const int _formatRemainderTopBit = 9;
+
+    // The QR format BCH generator polynomial.
+    private const int _formatGeneratorPolynomial = 0x537;
+
+    // The QR format bits are XOR-masked by this fixed pattern to avoid problematic all-zero fields.
+    private const int _formatMaskPattern = 0x5412;
+
+    // The vertical format-bit line is interrupted after bit 5 by the timing pattern.
+    private const int _formatFirstVerticalRunLastBit = 5;
+
+    // Format bit 6 is placed after the skipped timing coordinate on the vertical line.
+    private const int _formatSkippedTimingBit = 6;
+
+    // Format bit 7 is written at the central format coordinate.
+    private const int _formatCenterBit = 7;
+
+    // Format bit 8 is written next to the central format coordinate.
+    private const int _formatPostCenterBit = 8;
+
+    // Format bits 9 through 14 are mirrored along the top-left horizontal format line.
+    private const int _formatSecondRunFirstBit = 9;
+
+    // The last format bit index is 14 because format information has 15 bits.
+    private const int _formatLastBit = 14;
+
+    // Format bit mirroring around the top-left finder uses coordinate 14 - bit index.
+    private const int _formatMirrorCoordinateBase = 14;
+
+    // The second vertical format copy starts at bit 8.
+    private const int _formatSecondVerticalRunFirstBit = 8;
+
+    // The dark module is placed 8 modules above the lower-left corner.
+    private const int _darkModuleBottomOffset = 8;
+
+    // The version BCH remainder has 12 bits.
+    private const int _versionRemainderBitLength = 12;
+
+    // The top bit index of the version BCH remainder during division.
+    private const int _versionRemainderTopBit = 11;
+
+    // The QR version BCH generator polynomial.
+    private const int _versionGeneratorPolynomial = 0x1F25;
+
+    // Version information has 18 total bits after appending the 12-bit BCH remainder.
+    private const int _versionInformationBitLength = 18;
+
+    // Version information is placed 11 modules back from the far edge.
+    private const int _versionInformationFarEdgeOffset = 11;
+
+    // Version information is arranged in three columns.
+    private const int _versionInformationColumnCount = 3;
+
+    // Finder pattern drawing covers a radius of four modules around the 3-by-3 center.
+    private const int _finderPatternRadius = 4;
+
+    // Finder pattern ring distance 2 is light and separates the dark center from the outer ring.
+    private const int _finderPatternLightRingInnerDistance = 2;
+
+    // Finder pattern ring distance 4 is the light separator around the outer dark ring.
+    private const int _finderPatternLightRingOuterDistance = 4;
+
+    // Alignment pattern drawing covers a radius of two modules around its center.
+    private const int _alignmentPatternRadius = 2;
+
+    // Alignment pattern ring distance 1 is light and separates the dark center from the outer ring.
+    private const int _alignmentPatternLightRingDistance = 1;
+
+    // Data codewords are drawn two columns at a time in the QR zig-zag placement pattern.
+    private const int _dataPlacementColumnPairWidth = 2;
+
+    // The data-placement loop skips the vertical timing pattern column.
+    private const int _dataPlacementTimingColumn = 6;
+
+    // After skipping the timing column, placement resumes immediately to its left.
+    private const int _dataPlacementColumnBeforeTiming = 5;
+
+    // The mask-placement direction test uses bit 1 of the right-column coordinate.
+    private const int _dataPlacementDirectionMask = 2;
+
+    // The penalty-rule run history tracks the seven latest run lengths needed to detect finder-like patterns.
+    private const int _finderPenaltyRunHistoryLength = 7;
+
+    // Penalty rule N1 starts charging extra points when a same-color run reaches 5 modules.
+    private const int _penaltyLongRunThreshold = 5;
+
+    // Penalty rule N4 compares dark modules against 50% using tenths of 5%.
+    private const int _penaltyDarkModuleMultiplier = 20;
+
+    // Penalty rule N4 uses 50% as the ideal dark-module percentage.
+    private const int _penaltyIdealDarkModuleMultiplier = 10;
+
+    // One is subtracted after rounding N4's distance-to-ideal percentage as required by the QR penalty formula.
+    private const int _penaltyDarkModuleAdjustment = 1;
+
+    // Version 1 has no alignment patterns.
+    private const int _firstVersionWithoutAlignmentPatterns = 1;
+
+    // Alignment-pattern spacing uses 8 modules per version in the QR position formula.
+    private const int _alignmentPositionVersionMultiplier = 8;
+
+    // Alignment-pattern spacing adds three modules per alignment center in the QR position formula.
+    private const int _alignmentPositionCenterMultiplier = 3;
+
+    // Alignment-pattern spacing adds this rounding bias before dividing by the available gaps.
+    private const int _alignmentPositionRoundingBias = 5;
+
+    // Alignment-pattern spacing has four gaps per center except for the shared edge gap.
+    private const int _alignmentPositionGapMultiplier = 4;
+
+    // Alignment-pattern positions are forced to even module coordinates.
+    private const int _alignmentPositionEvenStepMultiplier = 2;
+
+    // The first alignment-pattern center is always at coordinate 6.
+    private const int _alignmentPatternFirstPosition = 6;
+
+    // The last alignment-pattern center is seven modules back from the far edge.
+    private const int _alignmentPatternFarEdgeOffset = 7;
+
+    // Finder-like penalty patterns have a 1:1:3:1:1 dark/light run core.
+    private const int _finderPenaltyCoreRunMultiplier = 3;
+
+    // Finder-like penalty patterns require a quiet light run four times the base width on either side.
+    private const int _finderPenaltyQuietRunMultiplier = 4;
+
+    // The exception text identifies QR versions outside the model 2 supported range.
+    private const string _versionOutOfRangeMessage = "Version number out of range";
+
+    // The exception text identifies constructor version arguments outside the model 2 supported range.
+    private const string _versionValueOutOfRangeMessage = "Version value out of range";
+
+    // The exception text identifies mask values outside the QR mask pattern range.
+    private const string _maskOutOfRangeMessage = "Mask value out of range";
+
+    // The exception text identifies invalid encoder option combinations.
+    private const string _invalidValueMessage = "Invalid value";
+
+    // The exception text identifies segment payloads too large for the requested QR version range.
+    private const string _segmentTooLongMessage = "Segment too long";
+
+    // The exception text format reports when encoded data bits exceed the selected QR version capacity.
+    private const string _dataLengthExceedsCapacityMessageFormat = "Data length = {0} bits, Max capacity = {1} bits";
+
+    // The exception text identifies generated data streams whose codeword count does not match the QR version.
+    private const string _invalidDataLengthMessage = "Invalid data length";
+
+    // The exception text identifies invalid Reed-Solomon divisor degrees.
+    private const string _degreeOutOfRangeMessage = "Degree out of range";
+
+    // Penalty rule N1 adds 3 points for each same-color run of five modules before longer-run increments.
     private const int _penaltyN1 = 3;
+
+    // Penalty rule N2 adds 3 points for each 2-by-2 same-color block.
     private const int _penaltyN2 = 3;
+
+    // Penalty rule N3 adds 40 points for each finder-like run pattern.
     private const int _penaltyN3 = 40;
+
+    // Penalty rule N4 adds 10 points for each 5% dark-module deviation band from 50%.
     private const int _penaltyN4 = 10;
 
+    // The number of ECC codewords in each block is fixed by QR version and ECC level, so table data stays grouped.
     private static readonly int[][] _errorCorrectionCodewordsPerBlock =
     [
         [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
@@ -24,6 +316,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         [-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
     ];
 
+    // The number of ECC blocks is fixed by QR version and ECC level, so table data stays grouped.
     private static readonly int[][] _errorCorrectionBlocks =
     [
         [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25],
@@ -46,12 +339,12 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     {
         if (version < MinVersion || version > MaxVersion)
         {
-            throw new ArgumentOutOfRangeException(nameof(version), "Version value out of range");
+            throw new ArgumentOutOfRangeException(nameof(version), _versionValueOutOfRangeMessage);
         }
 
-        if (mask < -1 || mask > 7)
+        if (mask < _automaticMask || mask > _maximumMask)
         {
-            throw new ArgumentOutOfRangeException(nameof(mask), "Mask value out of range");
+            throw new ArgumentOutOfRangeException(nameof(mask), _maskOutOfRangeMessage);
         }
 
         ArgumentNullException.ThrowIfNull(dataCodewords);
@@ -66,10 +359,10 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         var allCodewords = AddEccAndInterleave(dataCodewords);
         DrawCodewords(allCodewords);
 
-        if (mask == -1)
+        if (mask == _automaticMask)
         {
             var minPenalty = int.MaxValue;
-            for (var i = 0; i < 8; i++)
+            for (var i = _minimumMask; i <= _maximumMask; i++)
             {
                 ApplyMask(i);
                 DrawFormatBits(i);
@@ -130,7 +423,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     /// <returns>A QR Code representing the segments.</returns>
     public QRCodeSymbol EncodeSegments(IReadOnlyCollection<QRSegment> segments, QRErrorCorrectionLevel errorCorrectionLevel)
     {
-        return EncodeSegments(segments, errorCorrectionLevel, MinVersion, MaxVersion, -1, true);
+        return EncodeSegments(segments, errorCorrectionLevel, MinVersion, MaxVersion, _automaticMask, true);
     }
 
     /// <summary>
@@ -153,27 +446,35 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     {
         ArgumentNullException.ThrowIfNull(segments);
 
-        if (minVersion < MinVersion || minVersion > maxVersion || maxVersion > MaxVersion || mask < -1 || mask > 7)
+        if (minVersion < MinVersion
+            || minVersion > maxVersion
+            || maxVersion > MaxVersion
+            || mask < _automaticMask
+            || mask > _maximumMask)
         {
-            throw new ArgumentOutOfRangeException(nameof(minVersion), "Invalid value");
+            throw new ArgumentOutOfRangeException(nameof(minVersion), _invalidValueMessage);
         }
 
         var version = minVersion;
         int dataUsedBits;
         while (true)
         {
-            var dataCapacityBits = GetNumDataCodewords(version, errorCorrectionLevel) * 8;
+            var dataCapacityBits = GetNumDataCodewords(version, errorCorrectionLevel) * _bitsPerByte;
             dataUsedBits = QRSegment.GetTotalBits(segments, version);
-            if (dataUsedBits != -1 && dataUsedBits <= dataCapacityBits)
+            if (dataUsedBits != QRSegment.InvalidTotalBitLength && dataUsedBits <= dataCapacityBits)
             {
                 break;
             }
 
             if (version >= maxVersion)
             {
-                var message = dataUsedBits == -1
-                    ? "Segment too long"
-                    : $"Data length = {dataUsedBits} bits, Max capacity = {dataCapacityBits} bits";
+                var message = dataUsedBits == QRSegment.InvalidTotalBitLength
+                    ? _segmentTooLongMessage
+                    : string.Format(
+                        CultureInfo.InvariantCulture,
+                        _dataLengthExceedsCapacityMessageFormat,
+                        dataUsedBits,
+                        dataCapacityBits);
                 throw new DataTooLongException(message);
             }
 
@@ -183,7 +484,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         foreach (var newErrorCorrectionLevel in Enum.GetValues<QRErrorCorrectionLevel>())
         {
             if (boostErrorCorrectionLevel
-                && dataUsedBits <= GetNumDataCodewords(version, newErrorCorrectionLevel) * 8)
+                && dataUsedBits <= GetNumDataCodewords(version, newErrorCorrectionLevel) * _bitsPerByte)
             {
                 errorCorrectionLevel = newErrorCorrectionLevel;
             }
@@ -192,24 +493,26 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         var buffer = new BitBuffer();
         foreach (var segment in segments)
         {
-            buffer.AppendBits(segment.Mode.GetModeBits(), 4);
+            buffer.AppendBits(segment.Mode.GetModeBits(), _modeIndicatorBitLength);
             buffer.AppendBits(segment.CharacterCount, segment.Mode.GetCharacterCountBits(version));
             buffer.AppendData(segment.GetRawData());
         }
 
-        var dataCapacity = GetNumDataCodewords(version, errorCorrectionLevel) * 8;
-        buffer.AppendBits(0, Math.Min(4, dataCapacity - buffer.BitLength));
-        buffer.AppendBits(0, (8 - (buffer.BitLength % 8)) % 8);
+        var dataCapacity = GetNumDataCodewords(version, errorCorrectionLevel) * _bitsPerByte;
+        buffer.AppendBits(0, Math.Min(_terminatorBitLength, dataCapacity - buffer.BitLength));
+        buffer.AppendBits(0, (_bitsPerByte - (buffer.BitLength % _bitsPerByte)) % _bitsPerByte);
 
-        for (var padByte = 0xEC; buffer.BitLength < dataCapacity; padByte ^= 0xEC ^ 0x11)
+        for (var padByte = _padCodewordFirst;
+            buffer.BitLength < dataCapacity;
+            padByte ^= _padCodewordFirst ^ _padCodewordSecond)
         {
-            buffer.AppendBits(padByte, 8);
+            buffer.AppendBits(padByte, _bitsPerByte);
         }
 
-        var dataCodewords = new byte[buffer.BitLength / 8];
+        var dataCodewords = new byte[buffer.BitLength / _bitsPerByte];
         for (var i = 0; i < buffer.BitLength; i++)
         {
-            dataCodewords[i >>> 3] |= (byte)(buffer.GetBit(i) << (7 - (i & 7)));
+            dataCodewords[i >>> _bitIndexToByteShift] |= (byte)(buffer.GetBit(i) << (_highestBitIndexInByte - (i & _bitIndexInByteMask)));
         }
 
         return new QRCodeGenerator(version, errorCorrectionLevel, dataCodewords, mask).CreateQRCode();
@@ -227,7 +530,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     internal static int GetNumDataCodewords(int version, QRErrorCorrectionLevel errorCorrectionLevel)
     {
-        return (GetNumRawDataModules(version) / 8)
+        return (GetNumRawDataModules(version) / _bitsPerByte)
             - (_errorCorrectionCodewordsPerBlock[(int)errorCorrectionLevel][version]
             * _errorCorrectionBlocks[(int)errorCorrectionLevel][version]);
     }
@@ -247,22 +550,29 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     {
         if (version < MinVersion || version > MaxVersion)
         {
-            throw new ArgumentOutOfRangeException(nameof(version), "Version number out of range");
+            throw new ArgumentOutOfRangeException(nameof(version), _versionOutOfRangeMessage);
         }
 
         var size = QRCodeSymbol.CalculateSize(version);
         var result = size * size;
-        result -= 8 * 8 * 3;
-        result -= (15 * 2) + 1;
-        result -= (size - 16) * 2;
-        if (version >= 2)
+        result -= _finderPatternRawRegionModulesPerSide * _finderPatternRawRegionModulesPerSide * _finderPatternCount;
+        result -= (_formatBitLength * _formatInformationCopyCount) + _darkModuleCount;
+        result -= (size - _timingPatternExcludedEndModules) * _timingPatternLineCount;
+        if (version >= _alignmentPatternMinimumCentersPerAxis)
         {
-            var numAlign = (version / 7) + 2;
-            result -= (numAlign - 1) * (numAlign - 1) * 25;
-            result -= (numAlign - 2) * 2 * 20;
-            if (version >= 7)
+            var numAlign = (version / _alignmentPatternVersionDivisor) + _alignmentPatternMinimumCentersPerAxis;
+            result -= (numAlign - _reedSolomonIdentity)
+                * (numAlign - _reedSolomonIdentity)
+                * _alignmentPatternModulesPerSide
+                * _alignmentPatternModulesPerSide;
+            result -= (numAlign - _alignmentPatternTimingOverlapCount)
+                * _alignmentPatternTimingOverlapCount
+                * _alignmentPatternTimingOverlapModules;
+            if (version >= _minimumVersionWithVersionInformation)
             {
-                result -= 6 * 3 * 2;
+                result -= _versionInformationShortSide
+                    * _versionInformationLongSide
+                    * _versionInformationCopyCount;
             }
         }
 
@@ -271,15 +581,15 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     private static byte[] ReedSolomonComputeDivisor(int degree)
     {
-        if (degree < 1 || degree > 255)
+        if (degree < _reedSolomonIdentity || degree > _reedSolomonMaximumDegree)
         {
-            throw new ArgumentOutOfRangeException(nameof(degree), "Degree out of range");
+            throw new ArgumentOutOfRangeException(nameof(degree), _degreeOutOfRangeMessage);
         }
 
         var result = new byte[degree];
-        result[degree - 1] = 1;
+        result[degree - _reedSolomonIdentity] = _reedSolomonIdentity;
 
-        var root = 1;
+        var root = _reedSolomonIdentity;
         for (var i = 0; i < degree; i++)
         {
             for (var j = 0; j < result.Length; j++)
@@ -291,7 +601,7 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
                 }
             }
 
-            root = ReedSolomonMultiply(root, 0x02);
+            root = ReedSolomonMultiply(root, _reedSolomonGeneratorRootFactor);
         }
 
         return result;
@@ -320,10 +630,11 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     private static int ReedSolomonMultiply(int x, int y)
     {
         var z = 0;
-        for (var i = 7; i >= 0; i--)
+        for (var i = _reedSolomonBitCount - _reedSolomonIdentity; i >= 0; i--)
         {
-            z = (z << 1) ^ ((z >>> 7) * 0x11D);
-            z ^= ((y >>> i) & 1) * x;
+            z = (z << _reedSolomonIdentity)
+                ^ ((z >>> (_reedSolomonBitCount - _reedSolomonIdentity)) * _reedSolomonReducingPolynomial);
+            z ^= ((y >>> i) & _reedSolomonIdentity) * x;
         }
 
         return z;
@@ -335,12 +646,12 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
         if (data.Length != GetNumDataCodewords(Version, ErrorCorrectionLevel))
         {
-            throw new ArgumentException("Invalid data length", nameof(data));
+            throw new ArgumentException(_invalidDataLengthMessage, nameof(data));
         }
 
         var numBlocks = _errorCorrectionBlocks[(int)ErrorCorrectionLevel][Version];
         var blockEccLength = _errorCorrectionCodewordsPerBlock[(int)ErrorCorrectionLevel][Version];
-        var rawCodewords = GetNumRawDataModules(Version) / 8;
+        var rawCodewords = GetNumRawDataModules(Version) / _bitsPerByte;
         var numShortBlocks = numBlocks - (rawCodewords % numBlocks);
         var shortBlockLength = rawCodewords / numBlocks;
 
@@ -379,13 +690,13 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     {
         for (var i = 0; i < Size; i++)
         {
-            SetFunctionModule(6, i, i % 2 == 0);
-            SetFunctionModule(i, 6, i % 2 == 0);
+            SetFunctionModule(_timingPatternCoordinate, i, i % _dataPlacementColumnPairWidth == 0);
+            SetFunctionModule(i, _timingPatternCoordinate, i % _dataPlacementColumnPairWidth == 0);
         }
 
-        DrawFinderPattern(3, 3);
-        DrawFinderPattern(Size - 4, 3);
-        DrawFinderPattern(3, Size - 4);
+        DrawFinderPattern(_finderPatternCenterOffset, _finderPatternCenterOffset);
+        DrawFinderPattern(Size - _finderPatternFarEdgeOffset, _finderPatternCenterOffset);
+        DrawFinderPattern(_finderPatternCenterOffset, Size - _finderPatternFarEdgeOffset);
 
         var alignPatternPositions = GetAlignmentPatternPositions();
         for (var i = 0; i < alignPatternPositions.Length; i++)
@@ -407,60 +718,62 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     private void DrawFormatBits(int mask)
     {
-        var data = (ErrorCorrectionLevel.GetFormatBits() << 3) | mask;
+        var data = (ErrorCorrectionLevel.GetFormatBits() << _versionInformationColumnCount) | mask;
         var remainder = data;
-        for (var i = 0; i < 10; i++)
+        for (var i = 0; i < _formatRemainderBitLength; i++)
         {
-            remainder = (remainder << 1) ^ ((remainder >>> 9) * 0x537);
+            remainder = (remainder << _reedSolomonIdentity)
+                ^ ((remainder >>> _formatRemainderTopBit) * _formatGeneratorPolynomial);
         }
 
-        var bits = ((data << 10) | remainder) ^ 0x5412;
+        var bits = ((data << _formatRemainderBitLength) | remainder) ^ _formatMaskPattern;
 
-        for (var i = 0; i <= 5; i++)
+        for (var i = 0; i <= _formatFirstVerticalRunLastBit; i++)
         {
-            SetFunctionModule(8, i, GetBit(bits, i));
+            SetFunctionModule(_finderPatternRawRegionModulesPerSide, i, GetBit(bits, i));
         }
 
-        SetFunctionModule(8, 7, GetBit(bits, 6));
-        SetFunctionModule(8, 8, GetBit(bits, 7));
-        SetFunctionModule(7, 8, GetBit(bits, 8));
-        for (var i = 9; i < 15; i++)
+        SetFunctionModule(_finderPatternRawRegionModulesPerSide, _highestBitIndexInByte, GetBit(bits, _formatSkippedTimingBit));
+        SetFunctionModule(_finderPatternRawRegionModulesPerSide, _finderPatternRawRegionModulesPerSide, GetBit(bits, _formatCenterBit));
+        SetFunctionModule(_highestBitIndexInByte, _finderPatternRawRegionModulesPerSide, GetBit(bits, _formatPostCenterBit));
+        for (var i = _formatSecondRunFirstBit; i <= _formatLastBit; i++)
         {
-            SetFunctionModule(14 - i, 8, GetBit(bits, i));
+            SetFunctionModule(_formatMirrorCoordinateBase - i, _finderPatternRawRegionModulesPerSide, GetBit(bits, i));
         }
 
-        for (var i = 0; i < 8; i++)
+        for (var i = 0; i < _bitsPerByte; i++)
         {
-            SetFunctionModule(Size - 1 - i, 8, GetBit(bits, i));
+            SetFunctionModule(Size - _reedSolomonIdentity - i, _finderPatternRawRegionModulesPerSide, GetBit(bits, i));
         }
 
-        for (var i = 8; i < 15; i++)
+        for (var i = _formatSecondVerticalRunFirstBit; i <= _formatLastBit; i++)
         {
-            SetFunctionModule(8, Size - 15 + i, GetBit(bits, i));
+            SetFunctionModule(_finderPatternRawRegionModulesPerSide, Size - _formatBitLength + i, GetBit(bits, i));
         }
 
-        SetFunctionModule(8, Size - 8, true);
+        SetFunctionModule(_finderPatternRawRegionModulesPerSide, Size - _darkModuleBottomOffset, true);
     }
 
     private void DrawVersion()
     {
-        if (Version < 7)
+        if (Version < _minimumVersionWithVersionInformation)
         {
             return;
         }
 
         var remainder = Version;
-        for (var i = 0; i < 12; i++)
+        for (var i = 0; i < _versionRemainderBitLength; i++)
         {
-            remainder = (remainder << 1) ^ ((remainder >>> 11) * 0x1F25);
+            remainder = (remainder << _reedSolomonIdentity)
+                ^ ((remainder >>> _versionRemainderTopBit) * _versionGeneratorPolynomial);
         }
 
-        var bits = (Version << 12) | remainder;
-        for (var i = 0; i < 18; i++)
+        var bits = (Version << _versionRemainderBitLength) | remainder;
+        for (var i = 0; i < _versionInformationBitLength; i++)
         {
             var bit = GetBit(bits, i);
-            var a = Size - 11 + (i % 3);
-            var b = i / 3;
+            var a = Size - _versionInformationFarEdgeOffset + (i % _versionInformationColumnCount);
+            var b = i / _versionInformationColumnCount;
             SetFunctionModule(a, b, bit);
             SetFunctionModule(b, a, bit);
         }
@@ -468,16 +781,20 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     private void DrawFinderPattern(int x, int y)
     {
-        for (var dy = -4; dy <= 4; dy++)
+        for (var dy = -_finderPatternRadius; dy <= _finderPatternRadius; dy++)
         {
-            for (var dx = -4; dx <= 4; dx++)
+            for (var dx = -_finderPatternRadius; dx <= _finderPatternRadius; dx++)
             {
                 var distance = Math.Max(Math.Abs(dx), Math.Abs(dy));
                 var xx = x + dx;
                 var yy = y + dy;
                 if (0 <= xx && xx < Size && 0 <= yy && yy < Size)
                 {
-                    SetFunctionModule(xx, yy, distance != 2 && distance != 4);
+                    SetFunctionModule(
+                        xx,
+                        yy,
+                        distance != _finderPatternLightRingInnerDistance
+                            && distance != _finderPatternLightRingOuterDistance);
                 }
             }
         }
@@ -485,11 +802,14 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     private void DrawAlignmentPattern(int x, int y)
     {
-        for (var dy = -2; dy <= 2; dy++)
+        for (var dy = -_alignmentPatternRadius; dy <= _alignmentPatternRadius; dy++)
         {
-            for (var dx = -2; dx <= 2; dx++)
+            for (var dx = -_alignmentPatternRadius; dx <= _alignmentPatternRadius; dx++)
             {
-                SetFunctionModule(x + dx, y + dy, Math.Max(Math.Abs(dx), Math.Abs(dy)) != 1);
+                SetFunctionModule(
+                    x + dx,
+                    y + dy,
+                    Math.Max(Math.Abs(dx), Math.Abs(dy)) != _alignmentPatternLightRingDistance);
             }
         }
     }
@@ -504,29 +824,33 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
     {
         ArgumentNullException.ThrowIfNull(data);
 
-        if (data.Length != GetNumRawDataModules(Version) / 8)
+        if (data.Length != GetNumRawDataModules(Version) / _bitsPerByte)
         {
-            throw new ArgumentException("Invalid data length", nameof(data));
+            throw new ArgumentException(_invalidDataLengthMessage, nameof(data));
         }
 
         var i = 0;
-        for (var right = Size - 1; right >= 1; right -= 2)
+        for (var right = Size - _reedSolomonIdentity;
+            right >= _reedSolomonIdentity;
+            right -= _dataPlacementColumnPairWidth)
         {
-            if (right == 6)
+            if (right == _dataPlacementTimingColumn)
             {
-                right = 5;
+                right = _dataPlacementColumnBeforeTiming;
             }
 
             for (var vertical = 0; vertical < Size; vertical++)
             {
-                for (var j = 0; j < 2; j++)
+                for (var j = 0; j < _dataPlacementColumnPairWidth; j++)
                 {
                     var x = right - j;
-                    var upward = ((right + 1) & 2) == 0;
-                    var y = upward ? Size - 1 - vertical : vertical;
-                    if (!_isFunction![y][x] && i < data.Length * 8)
+                    var upward = ((right + _reedSolomonIdentity) & _dataPlacementDirectionMask) == 0;
+                    var y = upward ? Size - _reedSolomonIdentity - vertical : vertical;
+                    if (!_isFunction![y][x] && i < data.Length * _bitsPerByte)
                     {
-                        _modules[y][x] = GetBit(data[i >>> 3], 7 - (i & 7));
+                        _modules[y][x] = GetBit(
+                            data[i >>> _bitIndexToByteShift],
+                            _highestBitIndexInByte - (i & _bitIndexInByteMask));
                         i++;
                     }
                 }
@@ -536,9 +860,9 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
 
     private void ApplyMask(int mask)
     {
-        if (mask < 0 || mask > 7)
+        if (mask < _minimumMask || mask > _maximumMask)
         {
-            throw new ArgumentOutOfRangeException(nameof(mask), "Mask value out of range");
+            throw new ArgumentOutOfRangeException(nameof(mask), _maskOutOfRangeMessage);
         }
 
         for (var y = 0; y < Size; y++)
@@ -547,15 +871,21 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
             {
                 var invert = mask switch
                 {
-                    0 => (x + y) % 2 == 0,
-                    1 => y % 2 == 0,
-                    2 => x % 3 == 0,
-                    3 => (x + y) % 3 == 0,
-                    4 => ((x / 3) + (y / 2)) % 2 == 0,
-                    5 => ((x * y) % 2) + ((x * y) % 3) == 0,
-                    6 => (((x * y) % 2) + ((x * y) % 3)) % 2 == 0,
-                    7 => (((x + y) % 2) + ((x * y) % 3)) % 2 == 0,
-                    _ => throw new ArgumentOutOfRangeException(nameof(mask), "Mask value out of range"),
+                    _maskPattern0 => (x + y) % _dataPlacementColumnPairWidth == 0,
+                    _maskPattern1 => y % _dataPlacementColumnPairWidth == 0,
+                    _maskPattern2 => x % _versionInformationColumnCount == 0,
+                    _maskPattern3 => (x + y) % _versionInformationColumnCount == 0,
+                    _maskPattern4 => ((x / _versionInformationColumnCount) + (y / _dataPlacementColumnPairWidth))
+                        % _dataPlacementColumnPairWidth == 0,
+                    _maskPattern5 => ((x * y) % _dataPlacementColumnPairWidth)
+                        + ((x * y) % _versionInformationColumnCount) == 0,
+                    _maskPattern6 => (((x * y) % _dataPlacementColumnPairWidth)
+                        + ((x * y) % _versionInformationColumnCount))
+                        % _dataPlacementColumnPairWidth == 0,
+                    _maskPattern7 => (((x + y) % _dataPlacementColumnPairWidth)
+                        + ((x * y) % _versionInformationColumnCount))
+                        % _dataPlacementColumnPairWidth == 0,
+                    _ => throw new ArgumentOutOfRangeException(nameof(mask), _maskOutOfRangeMessage),
                 };
                 _modules[y][x] ^= invert && !_isFunction![y][x];
             }
@@ -570,13 +900,15 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         {
             var runColor = false;
             var runX = 0;
-            var runHistory = new int[7];
+            var runHistory = new int[_finderPenaltyRunHistoryLength];
             for (var x = 0; x < Size; x++)
             {
                 if (_modules[y][x] == runColor)
                 {
                     runX++;
-                    result += runX == 5 ? _penaltyN1 : runX > 5 ? 1 : 0;
+                    result += runX == _penaltyLongRunThreshold
+                        ? _penaltyN1
+                        : runX > _penaltyLongRunThreshold ? _reedSolomonIdentity : 0;
                 }
                 else
                 {
@@ -598,13 +930,15 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         {
             var runColor = false;
             var runY = 0;
-            var runHistory = new int[7];
+            var runHistory = new int[_finderPenaltyRunHistoryLength];
             for (var y = 0; y < Size; y++)
             {
                 if (_modules[y][x] == runColor)
                 {
                     runY++;
-                    result += runY == 5 ? _penaltyN1 : runY > 5 ? 1 : 0;
+                    result += runY == _penaltyLongRunThreshold
+                        ? _penaltyN1
+                        : runY > _penaltyLongRunThreshold ? _reedSolomonIdentity : 0;
                 }
                 else
                 {
@@ -649,23 +983,32 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         }
 
         var total = Size * Size;
-        var k = ((Math.Abs((dark * 20) - (total * 10)) + total - 1) / total) - 1;
+        var k = ((Math.Abs((dark * _penaltyDarkModuleMultiplier)
+            - (total * _penaltyIdealDarkModuleMultiplier))
+            + total
+            - _penaltyDarkModuleAdjustment) / total) - _penaltyDarkModuleAdjustment;
         result += k * _penaltyN4;
         return result;
     }
 
     private int[] GetAlignmentPatternPositions()
     {
-        if (Version == 1)
+        if (Version == _firstVersionWithoutAlignmentPatterns)
         {
             return [];
         }
 
-        var numAlign = (Version / 7) + 2;
-        var step = (((Version * 8) + (numAlign * 3) + 5) / ((numAlign * 4) - 4)) * 2;
+        var numAlign = (Version / _alignmentPatternVersionDivisor) + _alignmentPatternMinimumCentersPerAxis;
+        var step = (((Version * _alignmentPositionVersionMultiplier)
+                + (numAlign * _alignmentPositionCenterMultiplier)
+                + _alignmentPositionRoundingBias)
+            / ((numAlign * _alignmentPositionGapMultiplier) - _alignmentPositionGapMultiplier))
+            * _alignmentPositionEvenStepMultiplier;
         var result = new int[numAlign];
-        result[0] = 6;
-        for (int i = result.Length - 1, position = Size - 7; i >= 1; i--, position -= step)
+        result[0] = _alignmentPatternFirstPosition;
+        for (int i = result.Length - _reedSolomonIdentity, position = Size - _alignmentPatternFarEdgeOffset;
+            i >= _reedSolomonIdentity;
+            i--, position -= step)
         {
             result[i] = position;
         }
@@ -678,11 +1021,20 @@ public sealed class QRCodeGenerator : IQRCodeGenerator
         var n = runHistory[1];
         var core = n > 0
             && runHistory[2] == n
-            && runHistory[3] == n * 3
+            && runHistory[3] == n * _finderPenaltyCoreRunMultiplier
             && runHistory[4] == n
             && runHistory[5] == n;
-        return (core && runHistory[0] >= n * 4 && runHistory[6] >= n ? 1 : 0)
-            + (core && runHistory[6] >= n * 4 && runHistory[0] >= n ? 1 : 0);
+        return (core
+                && runHistory[0] >= n * _finderPenaltyQuietRunMultiplier
+                && runHistory[_finderPenaltyRunHistoryLength - _reedSolomonIdentity] >= n
+                    ? _reedSolomonIdentity
+                    : 0)
+            + (core
+                && runHistory[_finderPenaltyRunHistoryLength - _reedSolomonIdentity]
+                    >= n * _finderPenaltyQuietRunMultiplier
+                && runHistory[0] >= n
+                    ? _reedSolomonIdentity
+                    : 0);
     }
 
     private int FinderPenaltyTerminateAndCount(bool currentRunColor, int currentRunLength, int[] runHistory)
@@ -730,15 +1082,30 @@ public enum QRErrorCorrectionLevel
 
 internal static class QRErrorCorrectionLevelExtensions
 {
+    // Low ECC uses format bits 01 per the QR format-information specification.
+    private const int _lowFormatBits = 1;
+
+    // Medium ECC uses format bits 00 per the QR format-information specification.
+    private const int _mediumFormatBits = 0;
+
+    // Quartile ECC uses format bits 11 per the QR format-information specification.
+    private const int _quartileFormatBits = 3;
+
+    // High ECC uses format bits 10 per the QR format-information specification.
+    private const int _highFormatBits = 2;
+
+    // The exception text identifies ECC levels outside this implementation's enum values.
+    private const string _invalidErrorCorrectionLevelMessage = "Invalid error correction level";
+
     public static int GetFormatBits(this QRErrorCorrectionLevel level)
     {
         return level switch
         {
-            QRErrorCorrectionLevel.Low => 1,
-            QRErrorCorrectionLevel.Medium => 0,
-            QRErrorCorrectionLevel.Quartile => 3,
-            QRErrorCorrectionLevel.High => 2,
-            _ => throw new ArgumentOutOfRangeException(nameof(level), "Invalid error correction level"),
+            QRErrorCorrectionLevel.Low => _lowFormatBits,
+            QRErrorCorrectionLevel.Medium => _mediumFormatBits,
+            QRErrorCorrectionLevel.Quartile => _quartileFormatBits,
+            QRErrorCorrectionLevel.High => _highFormatBits,
+            _ => throw new ArgumentOutOfRangeException(nameof(level), _invalidErrorCorrectionLevelMessage),
         };
     }
 }

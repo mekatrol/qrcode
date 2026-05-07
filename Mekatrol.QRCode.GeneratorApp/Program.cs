@@ -22,11 +22,50 @@ internal static class Program
 
 internal sealed class GeneratorApplication(IQRCodeGenerator qrCodeGenerator)
 {
+    // The quiet zone width is four modules because QR readers require this blank border around the symbol.
     private const int _quietZoneModules = 4;
+
+    // The sample payload limits text to 100 characters to keep the generated QR Code compact and scannable.
     private const int _maximumTextLength = 100;
+
+    // The sample payload uses a four-digit year field to match the receiving system's fixed-width schema.
     private const string _year = "2026";
+
+    // The sample payload uses a four-digit month field to match the receiving system's fixed-width schema.
     private const string _month = "0005";
+
+    // The sample text is deterministic input whose hash is included in the generated payload.
     private const string _text = "sample text";
+
+    // The year field must contain exactly four digits in the payload schema.
+    private const int _yearLength = 4;
+
+    // The month field must contain exactly four digits in the payload schema.
+    private const int _monthLength = 4;
+
+    // The minimum encoded month is January, represented as 0001 by the fixed-width schema.
+    private const int _minimumMonth = 1;
+
+    // The maximum encoded month is December, represented as 0012 by the fixed-width schema.
+    private const int _maximumMonth = 12;
+
+    // A GUID is exactly 16 bytes and the payload validates that size after base64 decoding.
+    private const int _guidByteLength = 16;
+
+    // A dark QR module is printed as two block characters so console output keeps a square aspect ratio.
+    private const string _darkModuleText = "██";
+
+    // A light QR module is printed as two spaces to match the dark module's console width.
+    private const string _lightModuleText = "  ";
+
+    // The exception text identifies a sample year that does not match the payload schema.
+    private const string _invalidYearMessage = "Year must be exactly four digits.";
+
+    // The exception text identifies a sample month that does not match the payload schema.
+    private const string _invalidMonthMessage = "Month must be exactly four digits in the range 0001 through 0012.";
+
+    // The exception text identifies a UUID that does not decode to the 16 bytes required by Guid.
+    private const string _invalidUuidMessage = "UUID must be base64 for exactly 16 bytes.";
 
     public void Run()
     {
@@ -41,21 +80,24 @@ internal sealed class GeneratorApplication(IQRCodeGenerator qrCodeGenerator)
 
     private static QRCodeInput CreateInput()
     {
-        if (_year.Length != 4 || !_year.All(char.IsDigit))
+        if (_year.Length != _yearLength || !_year.All(char.IsDigit))
         {
-            throw new InvalidOperationException("Year must be exactly four digits.");
+            throw new InvalidOperationException(_invalidYearMessage);
         }
 
-        if (_month.Length != 4 || !_month.All(char.IsDigit) || !int.TryParse(_month, out var monthNumber) || monthNumber is < 1 or > 12)
+        if (_month.Length != _monthLength
+            || !_month.All(char.IsDigit)
+            || !int.TryParse(_month, out var monthNumber)
+            || monthNumber is < _minimumMonth or > _maximumMonth)
         {
-            throw new InvalidOperationException("Month must be exactly four digits in the range 0001 through 0012.");
+            throw new InvalidOperationException(_invalidMonthMessage);
         }
 
         var uuid = Guid.NewGuid();
         var uuidBase64 = Convert.ToBase64String(uuid.ToByteArray());
         if (!TryParseUuidBase64(uuidBase64, out var parsedUuid))
         {
-            throw new InvalidOperationException("UUID must be base64 for exactly 16 bytes.");
+            throw new InvalidOperationException(_invalidUuidMessage);
         }
 
         if (_text.Length > _maximumTextLength)
@@ -73,7 +115,7 @@ internal sealed class GeneratorApplication(IQRCodeGenerator qrCodeGenerator)
         try
         {
             var bytes = Convert.FromBase64String(value);
-            if (bytes.Length != 16)
+            if (bytes.Length != _guidByteLength)
             {
                 return false;
             }
@@ -111,7 +153,7 @@ internal sealed class GeneratorApplication(IQRCodeGenerator qrCodeGenerator)
         {
             for (var x = -_quietZoneModules; x < qrCode.Size + _quietZoneModules; x++)
             {
-                Console.Write(qrCode.GetModule(x, y) ? "██" : "  ");
+                Console.Write(qrCode.GetModule(x, y) ? _darkModuleText : _lightModuleText);
             }
 
             Console.WriteLine();

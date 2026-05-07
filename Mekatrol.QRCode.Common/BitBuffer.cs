@@ -2,6 +2,18 @@ namespace Mekatrol.QRCode.Common;
 
 public sealed class BitBuffer
 {
+    // The largest bit count accepted by AppendBits because the value argument is a 32-bit signed integer.
+    private const int _maximumAppendBitLength = 31;
+
+    // One is the additive offset used to walk from the highest requested bit down to the lowest bit.
+    private const int _bitIndexOffset = 1;
+
+    // The exception text is reused for overflow paths so callers receive a consistent capacity failure message.
+    private const string _maximumLengthReachedMessage = "Maximum length reached";
+
+    // The exception text identifies invalid bit append requests without exposing internal validation details.
+    private const string _valueOutOfRangeMessage = "Value out of range";
+
     private readonly List<bool> _data = [];
 
     public int BitLength => _data.Count;
@@ -18,17 +30,17 @@ public sealed class BitBuffer
 
     public void AppendBits(int value, int length)
     {
-        if (length < 0 || length > 31 || (value >>> length) != 0)
+        if (length < 0 || length > _maximumAppendBitLength || (value >>> length) != 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(value), "Value out of range");
+            throw new ArgumentOutOfRangeException(nameof(value), _valueOutOfRangeMessage);
         }
 
         if (int.MaxValue - _data.Count < length)
         {
-            throw new InvalidOperationException("Maximum length reached");
+            throw new InvalidOperationException(_maximumLengthReachedMessage);
         }
 
-        for (var i = length - 1; i >= 0; i--)
+        for (var i = length - _bitIndexOffset; i >= 0; i--)
         {
             _data.Add(QRCodeGenerator.GetBit(value, i));
         }
@@ -40,7 +52,7 @@ public sealed class BitBuffer
 
         if (int.MaxValue - _data.Count < buffer._data.Count)
         {
-            throw new InvalidOperationException("Maximum length reached");
+            throw new InvalidOperationException(_maximumLengthReachedMessage);
         }
 
         _data.AddRange(buffer._data);
